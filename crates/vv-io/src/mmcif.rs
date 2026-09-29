@@ -2,127 +2,43 @@
 //!
 //! The `_atom_site` table is parsed in parallel chunks straight into the
 //! columnar model (one row per line, no per-atom allocation); every other
-//! category goes through the generic CIF reader in `cif.rs`.
+//! category goes through the generic CIF reader in `cif.rs`. The
+//! column-to-atom mapping is shared with the BinaryCIF reader
+//! (`atom_site`).
 
 use std::collections::HashMap;
 
 use rayon::prelude::*;
-use vv_core::glam::Vec3;
 use vv_core::{
-    AnnotationCategory, Annotations, AtomExtra, AtomRow, BondOrder, Element, ExplicitBond,
-    ExplicitBondKind, SecondaryStructure, Structure, Topology, TopologyBuilder,
+    AnnotationCategory, Annotations, BondOrder, ExplicitBond, ExplicitBondKind, SecondaryStructure,
+    Structure, Topology,
 };
 
+use crate::atom_site::{assemble, AtomSink, ChunkResult, Columns, Fields, Role};
 use crate::cif::{self, is_null, Category, LoopLocation};
 use crate::float::{parse_f32, parse_i32};
 use crate::mmcif_entity::EntityInfo;
 use crate::ss_range::{self, SsRange};
 use crate::ParseError;
 
-/// The PDBx dictionary has no segment id. This local item carries a
-/// PDB/MD segid so it survives a round trip through mmCIF.
-pub(crate) const SEGID_ITEM: &str = "vizviz_segid";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Role {
-    Group,
-    Id,
-    Element,
-    Name,
-    AltLoc,
-    Comp,
-    Asym,
-    Entity,
-    SeqId,
-    InsCode,
-    X,
-    Y,
-    Z,
-    Occupancy,
-    BFactor,
-    Charge,
-    AuthSeqId,
-    AuthAsym,
-    AuthAtomName,
-    Model,
-    Segid,
+/// One split text row viewed through the shared column mapping.
+struct TextRow<'r, 'a> {
+    cols: &'r Columns,
+    fields: &'r [&'a [u8]],
 }
 
-impl Role {
-    fn from_item(item: &str) -> Option<Role> {
-        Some(match item {
-            "group_PDB" => Role::Group,
-            "id" => Role::Id,
-            "type_symbol" => Role::Element,
-            "label_atom_id" => Role::Name,
-            "label_alt_id" => Role::AltLoc,
-            "label_comp_id" => Role::Comp,
-            "label_asym_id" => Role::Asym,
-            "label_entity_id" => Role::Entity,
-            "label_seq_id" => Role::SeqId,
-            "pdbx_PDB_ins_code" => Role::InsCode,
-            "Cartn_x" => Role::X,
-            "Cartn_y" => Role::Y,
-            "Cartn_z" => Role::Z,
-            "occupancy" => Role::Occupancy,
-            "B_iso_or_equiv" => Role::BFactor,
-            "pdbx_formal_charge" => Role::Charge,
-            "auth_seq_id" => Role::AuthSeqId,
-            "auth_asym_id" => Role::AuthAsym,
-            "auth_atom_id" => Role::AuthAtomName,
-            "pdbx_PDB_model_num" => Role::Model,
-            SEGID_ITEM => Role::Segid,
-            _ => return None,
-        })
-    }
-}
-
-/// Column index of each role, or `usize::MAX` when absent.
-struct Columns {
-    index: [usize; 21],
-    count: usize,
-}
-
-impl Columns {
-    fn new(items: &[&str]) -> Result<Self, ParseError> {
-        let mut index = [usize::MAX; 21];
-        for (i, item) in items.iter().enumerate() {
-            if let Some(role) = Role::from_item(item) {
-                index[role as usize] = i;
-            }
-        }
-        let cols = Self {
-            index,
-            count: items.len(),
-        };
-        for (role, name) in [
-            (Role::X, "Cartn_x"),
-            (Role::Y, "Cartn_y"),
-            (Role::Z, "Cartn_z"),
-            (Role::Comp, "label_comp_id"),
-            (Role::Asym, "label_asym_id"),
-        ] {
-            if !cols.has(role) {
-                return Err(ParseError::MissingColumn(name));
-            }
-        }
-        if !cols.has(Role::Name) && !cols.has(Role::AuthAtomName) {
-            return Err(ParseError::MissingColumn("label_atom_id"));
-        }
-        Ok(cols)
+impl<'a> Fields<'a> for TextRow<'_, 'a> {
+    fn text(&self, role: Role) -> Option<&'a [u8]> {
+        let i = self.cols.of(role)?;
+        self.fields.get(i).copied().filter(|v| !is_null(v))
     }
 
-    fn has(&self, role: Role) -> bool {
-        self.index[role as usize] != usize::MAX
+    fn int(&self, role: Role) -> Option<i32> {
+        self.text(role).and_then(parse_i32)
     }
 
-    fn get<'a>(&self, fields: &[&'a [u8]], role: Role) -> Option<&'a [u8]> {
-        let i = self.index[role as usize];
-        if i == usize::MAX {
-            None
-        } else {
-            fields.get(i).copied().filter(|v| !is_null(v))
-        }
+    fn float(&self, role: Role) -> Option<f32> {
+        self.text(role).and_then(parse_f32)
     }
 }
 
@@ -165,32 +81,8 @@ fn split_fields<'a>(line: &'a [u8], out: &mut Vec<&'a [u8]>) {
     }
 }
 
-fn atom_name(bytes: &[u8]) -> [u8; 4] {
-    let mut name = [b' '; 4];
-    let n = bytes.len().min(4);
-    name[..n].copy_from_slice(&bytes[..n]);
-    name
-}
-
-fn parse_charge(v: Option<&[u8]>) -> i8 {
-    v.and_then(parse_i32).map_or(0, |c| c.clamp(-9, 9) as i8)
-}
-
-fn as_str(v: Option<&[u8]>) -> &str {
-    v.and_then(|b| std::str::from_utf8(b).ok()).unwrap_or("")
-}
-
-struct ChunkResult {
-    builder: TopologyBuilder,
-    /// Coordinates of rows belonging to other models, keyed by model number.
-    other_models: Vec<(i32, Vec<Vec3>)>,
-    error: Option<ParseError>,
-}
-
 fn parse_chunk(chunk: &[u8], cols: &Columns, first_model: i32, line_offset: usize) -> ChunkResult {
-    let estimate = chunk.len() / 80 + 1;
-    let mut builder = TopologyBuilder::with_capacity(estimate);
-    let mut other_models: Vec<(i32, Vec<Vec3>)> = Vec::new();
+    let mut sink = AtomSink::new(chunk.len() / 80 + 1, first_model);
     let mut fields: Vec<&[u8]> = Vec::with_capacity(cols.count);
     for (line_no, line) in (line_offset + 1..).zip(chunk.split(|&b| b == b'\n')) {
         let line = match line.last() {
@@ -201,106 +93,28 @@ fn parse_chunk(chunk: &[u8], cols: &Columns, first_model: i32, line_offset: usiz
             continue;
         }
         split_fields(line, &mut fields);
+        let malformed = |message: String| ParseError::Malformed {
+            line: line_no,
+            message,
+        };
         if fields.len() != cols.count {
-            return ChunkResult {
-                builder,
-                other_models,
-                error: Some(ParseError::Malformed {
-                    line: line_no,
-                    message: format!(
-                        "{ROW_FIELD_MISMATCH} {} fields, header has {}",
-                        fields.len(),
-                        cols.count
-                    ),
-                }),
-            };
+            let message = format!(
+                "{ROW_FIELD_MISMATCH} {} fields, header has {}",
+                fields.len(),
+                cols.count
+            );
+            return sink.finish(Some(malformed(message)));
         }
-        let coord = |role| cols.get(&fields, role).and_then(parse_f32);
-        let (Some(x), Some(y), Some(z)) = (coord(Role::X), coord(Role::Y), coord(Role::Z)) else {
-            return ChunkResult {
-                builder,
-                other_models,
-                error: Some(ParseError::Malformed {
-                    line: line_no,
-                    message: "unreadable coordinates".into(),
-                }),
-            };
+        let row = TextRow {
+            cols,
+            fields: &fields,
         };
-        let position = Vec3::new(x, y, z);
-        let model = cols
-            .get(&fields, Role::Model)
-            .and_then(parse_i32)
-            .unwrap_or(first_model);
-        if model != first_model {
-            match other_models.iter_mut().find(|(m, _)| *m == model) {
-                Some((_, v)) => v.push(position),
-                None => other_models.push((model, vec![position])),
-            }
-            continue;
+        if let Err(message) = sink.push(&row) {
+            return sink.finish(Some(malformed(message.into())));
         }
-
-        let name_bytes = cols
-            .get(&fields, Role::Name)
-            .or_else(|| cols.get(&fields, Role::AuthAtomName))
-            .unwrap_or(b"");
-        let symbol = cols.get(&fields, Role::Element);
-        let element = symbol
-            .map(Element::from_symbol)
-            .filter(|e| !e.is_unknown())
-            .unwrap_or_else(|| Element::from_atom_name(name_bytes));
-        let extra = AtomExtra {
-            long_name: std::str::from_utf8(name_bytes).ok().filter(|n| n.len() > 4),
-            segid: as_str(cols.get(&fields, Role::Segid)),
-            deuterium: matches!(symbol, Some(b"D" | b"d")),
-        };
-        let asym = as_str(cols.get(&fields, Role::Asym));
-        let auth_asym = cols
-            .get(&fields, Role::AuthAsym)
-            .map_or(asym, |a| as_str(Some(a)));
-        let auth_seq_id = cols.get(&fields, Role::AuthSeqId).and_then(parse_i32);
-        let seq_id = cols.get(&fields, Role::SeqId).and_then(parse_i32);
-        let row = AtomRow {
-            element,
-            name: atom_name(name_bytes),
-            serial: cols
-                .get(&fields, Role::Id)
-                .and_then(parse_i32)
-                .unwrap_or(0)
-                .max(0) as u32,
-            alt_loc: cols.get(&fields, Role::AltLoc).map_or(0, |a| a[0]),
-            comp: as_str(cols.get(&fields, Role::Comp)),
-            asym,
-            auth_asym,
-            seq_id: seq_id.or(auth_seq_id).unwrap_or(0),
-            auth_seq_id: auth_seq_id.or(seq_id).unwrap_or(0),
-            ins_code: cols.get(&fields, Role::InsCode).map_or(0, |c| c[0]),
-            entity: cols
-                .get(&fields, Role::Entity)
-                .and_then(parse_i32)
-                .unwrap_or(0) as u16,
-            position,
-            occupancy: cols
-                .get(&fields, Role::Occupancy)
-                .and_then(parse_f32)
-                .unwrap_or(1.0),
-            b_factor: cols
-                .get(&fields, Role::BFactor)
-                .and_then(parse_f32)
-                .unwrap_or(0.0),
-            charge: parse_charge(cols.get(&fields, Role::Charge)),
-            hetero: cols
-                .get(&fields, Role::Group)
-                .is_some_and(|g| g == b"HETATM"),
-        };
-        builder.push_with(&row, &extra);
     }
-    ChunkResult {
-        builder,
-        other_models,
-        error: None,
-    }
+    sink.finish(None)
 }
-
 /// Splits `body` into roughly equal chunks on line boundaries.
 fn chunk_ranges(body: &[u8], target: usize) -> Vec<std::ops::Range<usize>> {
     let mut ranges = Vec::new();
@@ -377,20 +191,7 @@ fn parse_rows(
 ) -> Result<Structure, ParseError> {
     let cols = Columns::new(items)?;
 
-    let first_model = {
-        let mut fields = Vec::new();
-        let first_line = body
-            .split(|&b| b == b'\n')
-            .find(|l| !l.is_empty() && l[0] != b'#' && !l.iter().all(u8::is_ascii_whitespace));
-        first_line
-            .map(|l| {
-                split_fields(l, &mut fields);
-                cols.get(&fields, Role::Model)
-                    .and_then(parse_i32)
-                    .unwrap_or(1)
-            })
-            .unwrap_or(1)
-    };
+    let first_model = first_model(body, &cols);
 
     let threads = rayon::current_num_threads().max(1);
     let target = (body.len() / (threads * 4)).clamp(1 << 20, 64 << 20);
@@ -412,33 +213,23 @@ fn parse_rows(
         .zip(line_starts.par_iter())
         .map(|(r, &line_start)| parse_chunk(&body[r.clone()], &cols, first_model, line_start))
         .collect();
+    assemble(results, entity)
+}
 
-    let mut builder = TopologyBuilder::new();
-    let mut models: Vec<(i32, Vec<Vec3>)> = Vec::new();
-    for result in results {
-        if let Some(e) = result.error {
-            return Err(e);
-        }
-        builder.append(result.builder);
-        for (model, mut coords) in result.other_models {
-            match models.iter_mut().find(|(m, _)| *m == model) {
-                Some((_, v)) => v.append(&mut coords),
-                None => models.push((model, coords)),
-            }
-        }
-    }
-    if builder.atom_count() == 0 {
-        return Err(ParseError::NoAtoms);
-    }
-    let atom_count = builder.atom_count();
-    models.sort_by_key(|(m, _)| *m);
-    let extra: Vec<Vec<Vec3>> = models
-        .into_iter()
-        .filter(|(_, v)| v.len() == atom_count)
-        .map(|(_, v)| v)
-        .collect();
-    builder.topology.polymer_hint = entity.hints(&builder.topology);
-    builder.finish_with_frames(extra).map_err(ParseError::from)
+/// The model number of the first row, which defines the topology.
+fn first_model(body: &[u8], cols: &Columns) -> i32 {
+    let mut fields = Vec::new();
+    let first_line = body
+        .split(|&b| b == b'\n')
+        .find(|l| !l.is_empty() && l[0] != b'#' && !l.iter().all(u8::is_ascii_whitespace));
+    first_line.map_or(1, |l| {
+        split_fields(l, &mut fields);
+        let row = TextRow {
+            cols,
+            fields: &fields,
+        };
+        row.int(Role::Model).unwrap_or(1)
+    })
 }
 
 /// One row's range, by label chain and label sequence number; the
@@ -735,8 +526,29 @@ fn read_first_atom_block(
     Err(ParseError::NoAtoms)
 }
 
+/// Whether the reader reads category `name` (without the leading `_`);
+/// BinaryCIF decodes only these besides `atom_site`.
+pub(crate) fn consumes(name: &str) -> bool {
+    const STRUCTURAL: [&str; 8] = [
+        "struct_conf",
+        "struct_sheet_range",
+        "struct_conn",
+        "chem_comp_bond",
+        "entity",
+        "entity_poly",
+        "chem_comp",
+        "atom_site",
+    ];
+    STRUCTURAL.contains(&name) || ANNOTATION_CATEGORIES.iter().any(|&(n, _, _)| n == name)
+}
+
 pub fn parse(src: &[u8]) -> Result<Structure, ParseError> {
-    let (mut structure, cats) = read_first_atom_block(src)?;
+    let (structure, cats) = read_first_atom_block(src)?;
+    Ok(finish(structure, &cats))
+}
+
+/// Applies everything but the atoms: header, secondary structure and bonds.
+pub(crate) fn finish(mut structure: Structure, cats: &HashMap<String, Category<'_>>) -> Structure {
     let topology = std::sync::Arc::get_mut(&mut structure.topology).expect("fresh structure");
     if let Some(entry) = cats.get("entry") {
         topology.id = entry.get_str(0, "id").unwrap_or("").to_string();
@@ -744,11 +556,11 @@ pub fn parse(src: &[u8]) -> Result<Structure, ParseError> {
     if let Some(s) = cats.get("struct") {
         topology.title = s.get_str(0, "title").unwrap_or("").trim().to_string();
     }
-    topology.annotations = collect_annotations(&cats);
-    apply_secondary_structure(topology, &cats);
-    apply_struct_conn(topology, &cats);
-    apply_chem_comp_bond(topology, &cats);
-    Ok(structure)
+    topology.annotations = collect_annotations(cats);
+    apply_secondary_structure(topology, cats);
+    apply_struct_conn(topology, cats);
+    apply_chem_comp_bond(topology, cats);
+    structure
 }
 
 #[cfg(test)]

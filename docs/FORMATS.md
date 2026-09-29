@@ -51,12 +51,18 @@ PRMTOP alone is not a valid structure.
   format), then each column's encodings undone last to first
   (`ByteArray`, `FixedPoint`, `IntervalQuantization`, `RunLength`,
   `Delta`, `IntegerPacking`, `StringArray`; masks give `.` and `?`).
-- The decoded first data block with an `_atom_site` table is re-emitted
-  as CIF text and read by the mmCIF reader, so both syntaxes agree on
-  atoms, chains, secondary structure, connectivity, entities and
-  annotations by construction. The cost is a text buffer the size of the
-  equivalent mmCIF and no parallel atom parse: a BinaryCIF file is
-  smaller on disk, not faster to load.
+- In the first data block with an `_atom_site` table, only the columns
+  the mmCIF reader has a role for are decoded (in parallel, one task per
+  column) and fed row by row, in parallel chunks, through the same
+  column-to-atom mapping as the mmCIF text reader (`atom_site` module), so
+  atoms, chains, segids, deuterium and models agree by construction. The
+  other categories the reader consumes (entity tables, secondary
+  structure, `struct_conn`, `chem_comp_bond`, the annotation categories)
+  are decoded to a small CIF text and go through the mmCIF reader's own
+  category code; every other category is never decoded. No text copy of
+  the atoms is made: 4V6X (237,685 atoms, 12 MB `.bcif`) loads in about
+  75 ms against 140 ms for its `.cif.gz` (release build, 7 runs, minimum;
+  the earlier text re-emit took 400 ms).
 - `fetch ID bcif` (`vv_io::fetch::fetch_bcif`) downloads the asymmetric
   unit from `models.rcsb.org/ID.bcif`.
 - MMTF is not read: RCSB stopped serving it in July 2024 and recommends
@@ -139,11 +145,11 @@ Every row is pinned by a test in `crates/vv-io/tests/formats_audit.rs`
 |---|---|---|
 | ATOM/HETATM columns (serial 7-11, name 13-16, altLoc 17, resName 18-20, chain 22, resSeq 23-26, iCode 27, xyz 31-54, occupancy, B, element 77-78, charge 79-80) | yes | fixed slices; a record ending before column 54 is a line-numbered error, not a panic |
 | 4-character residue names (column 21 borrowed) | yes | columns 18-21 read as the name; the writer emits the same |
-| Segment id (73-76) | yes | kept on the chain record (`Topology::segid`, `segname` selection) and written back; a change of segid within one chain letter starts a new chain record; the chain name is the segid only when column 22 is blank |
+| Segment id (73-76) | yes | kept on the chain record (`Topology::segid`, `segname` selection) and written back (a segid over four characters is cut, with one writer warning); a change of segid within one chain letter starts a new chain record; the chain name is the segid only when column 22 is blank |
 | Alternate locations | yes | all conformers kept, tagged in `alt_loc`; bonds, SASA and `altloc` selection are alt-aware (same policy as mmCIF); which one draws is the `altloc` display policy (see Policies) |
 | Insertion codes | yes | `(chain, seq, iCode, name)` is the residue key; `52` and `52A` are distinct residues |
 | Microheterogeneity (`ASER`/`BTHR` at one number) | yes | residue name is part of the key, so each variant is its own residue |
-| Element: column 77-78, else name | yes | `D` is deuterium (hydrogen with the `DEUTERIUM` flag, written back as `D`); blank falls back to name (`CA` at column 13 is calcium, ` CA ` carbon) and never yields deuterium |
+| Element: column 77-78, else name | yes | `D` is deuterium (hydrogen with the `DEUTERIUM` flag, written back as `D`); blank falls back to name (`CA` at column 13 is calcium, ` CA ` carbon); with the column blank, deuterium is read from the name only for a lone `D` right-justified at column 14 (` D  `, ` DA `) or a filled four-character locant (`DD21`, `DG12`); `DY  `, `DUM `, ` CD ` and every name of a filled element column are unaffected (no heavy atom is aligned like that) |
 | Charge `2+` / `1-` | yes | also accepts the sign-first `+2` some writers emit |
 | Hybrid-36 serials and residue numbers | yes | read and written (`pdb::hybrid36`, `pdb::encode_hybrid36`) |
 | TER | yes | starts a new chain record even when the letter repeats (MD systems with one letter); chain selection, chain colours and the sequence strip treat records sharing a name as one chain |
@@ -154,7 +160,7 @@ Every row is pinned by a test in `crates/vv-io/tests/formats_audit.rs`
 | HELIX, SHEET | yes | range walked in file order from first to last residue, so insertion-code residues are inside; HETATM ligands reusing a number are not |
 | CRYST1 | yes | kept as `cell` / `symmetry` annotations (and written back) |
 | HEADER, TITLE, COMPND, SOURCE, EXPDTA, REMARK 2, JRNL, KEYWDS, DBREF | yes | mapped onto mmCIF category names (see Annotations) |
-| SEQRES | yes | polymer status only (see "Polymer status"); the sequence itself is not kept |
+| SEQRES | yes | polymer status only (see "Polymer status"); the sequence itself is not kept, but the writer regenerates `SEQRES` from the polymer residues (13 names per line, columns per v3.3) |
 | ANISOU, MASTER, SITE, REMARK 350 | ignored | no field in the data model; skipped without error |
 | Assemblies (REMARK 350 BIOMT) | no | use the `fetch` assembly files |
 
@@ -169,7 +175,7 @@ Every row is pinned by a test in `crates/vv-io/tests/formats_audit.rs`
 | `_atom_site` as key/value pairs (single atom) | yes | converted to one row |
 | Several data blocks | yes | the first block that has an `_atom_site` table is used |
 | Gzip | yes | detected by magic bytes |
-| BinaryCIF | yes | `.bcif`, read through the same reader (see BinaryCIF) |
+| BinaryCIF | yes | `.bcif`, decoded straight into the mmCIF reader's atom rows (see BinaryCIF) |
 | MMTF | no | retired by RCSB in 2024; reported as an unknown format |
 | label_* vs auth_* | yes | one rule: chain record = `label_asym_id` (`auth_asym_id` kept), `seq_id` = `label_seq_id` else `auth_seq_id` (non-polymers have none), `auth_seq_id` always kept; the PDB reader sets both from the same column, so cross-format comparisons key on the auth values |
 | `label_alt_id`, `pdbx_PDB_ins_code`, `pdbx_formal_charge`, `type_symbol` | yes | as above; missing `type_symbol` falls back to the atom name |
@@ -180,7 +186,8 @@ Every row is pinned by a test in `crates/vv-io/tests/formats_audit.rs`
 | `entity`, `entity_poly`, `chem_comp.type` | yes | decide polymer vs non-polymer per residue (see "Polymer status"); `entity` is also kept as an annotation |
 | Atom names longer than 4 characters | yes | kept whole; the PDB writer truncates with a warning |
 | `type_symbol` `D` | yes | deuterium flag on a hydrogen |
-| Segment id | local item | `_atom_site.vizviz_segid` (the dictionary defines none) |
+| Segment id | local item | `_atom_site.vizviz_segid` (the dictionary defines none); a change of segid within one `label_asym_id` starts a new chain record, as in PDB |
+| Entity tables written | yes | `_entity`, `_entity_poly` (type, canonical one-letter sequence, strand ids), `_pdbx_entity_nonpoly`, `_chem_comp`; `label_entity_id` matches; see Writers |
 
 ### Policies
 
@@ -215,6 +222,13 @@ before classes are assigned (`vv_core::residue_class`):
   not polymer unless it is a modified residue the `SEQRES` names (`MSE`);
   a standard residue is written `ATOM` inside a polymer, so a `HETATM` one
   is a free ligand. Chains without `SEQRES` (MD output) give no hint.
+- **Writers.** Both writers state the same thing back (see "Writers"), so
+  a read, write, read cycle keeps every residue's class and, up to the
+  distinction between water, non-polymer and unstated, its hint. mmCIF
+  writes cut a chain record into one `label_asym_id` per run of one kind,
+  so a polymer and the ligands sharing its chain record come back as
+  separate chain records. A standard-residue `HETATM` in a chain absent
+  from `SEQRES` is read as a free ligand.
 - A `non-polymer` hint only demotes a protein or nucleic name reading;
   glycan, lipid and ion names keep their class. Residues with no hint
   keep the name-table class.
@@ -232,9 +246,15 @@ antibody insertion codes, 3NIR alternate locations, 2K39 116 NMR models,
 for the >99999-atom hybrid-36 round trip). Parsed atom and model counts
 are asserted against the raw `ATOM`/`HETATM`/`ENDMDL` counts in the files.
 
+`cargo test -p vv-io --test polymer_roundtrip` writes 4HHB, 1AKE and 1CRN
+(`.pdb` and `.cif` sources) through both writers and compares classes and
+hints, plus a free amino acid ligand snippet and the written entity and
+`SEQRES` text.
+
 `cargo test -p vv-io --test bcif` reads 1CRN, 1AKE and 4HHB as `.bcif` and
-checks atoms, names, coordinates to 1e-3, chains, elements, classes and
-secondary structure against the `.cif` and `.pdb`. `--test atom_identity`
+checks atoms, names, coordinates to 1e-3, chains, elements, classes, hints,
+residues, bonds and secondary structure against the `.cif` and `.pdb`
+(`-- --ignored` adds 4V6X `.bcif` against `.cif.gz`). `--test atom_identity`
 covers deuterium, long names, segids (`fixtures/small/md_segments.pdb`),
 entity and `SEQRES` polymer status and the altloc policy; with `--ignored`
 it uses `fixtures/real/` downloads of the neutron entries 3KCJ (H and D
@@ -266,7 +286,10 @@ files.
   5/4 decimal digits switch to the hybrid-36 extension
   (`pdb::encode_hybrid36`, inverse of `pdb::hybrid36`) rather than
   wrapping. Deuterium is written as element `D`. The segment id fills
-  columns 73-76 (cut to four characters). An atom name over four
+  columns 73-76 (cut to four characters, with one warning counting the
+  chain records affected). `SEQRES` is written for each polymer chain from
+  its residue sequence (13 three-character names per line; a residue
+  number shared by several names counts once), before `HELIX`. An atom name over four
   characters is cut to four; when the cut collides with another name of
   the same residue and alternate location, its last character becomes a
   counter (`1`-`9`, `A`-`Z`) so names stay unique, with one warning that
@@ -282,7 +305,17 @@ files.
   bonds as a `_struct_conn` loop. No column-width limit, so atom counts,
   chain names and atom names are lossless. Deuterium is `type_symbol` `D`;
   segment ids go in the local `_atom_site.vizviz_segid` column when any
-  chain has one. There is no BinaryCIF writer.
+  chain has one. Entities: consecutive residues of one kind (protein or
+  nucleic polymer from the hint, else the residue class; branched for two
+  or more glycans; water; other non-polymer, one run per residue name)
+  form one `label_asym_id`; asyms with the same kind and monomer sequence
+  share an entity id. `_entity` (`polymer`, `non-polymer`, `branched`,
+  `water`), `_entity_poly` (`polypeptide(L)`, `polyribonucleotide`,
+  `polydeoxyribonucleotide` or the hybrid; `pdbx_seq_one_letter_code_can`,
+  parent letter for common variants, else `X`/`N`; `pdbx_strand_id` the
+  author chains), `_pdbx_entity_nonpoly` and `_chem_comp` (`id`, `type`)
+  precede `_atom_site`, whose `label_entity_id` matches. There is no
+  BinaryCIF writer.
 - **XYZ** (`xyz_write`), **PQR** (`pqr_write`), **GRO** (`gro_write`):
   minimal, no readers in this crate (round-trip tests parse the text
   directly). PQR's charge is the file's formal integer charge, not a

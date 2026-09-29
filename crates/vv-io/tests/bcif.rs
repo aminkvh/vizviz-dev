@@ -85,6 +85,12 @@ fn agrees_with_mmcif_and_pdb_on_the_fixture_entries() {
         assert_eq!(tb.element, tc.element, "{id} elements");
         assert_eq!(tb.charge, tc.charge, "{id} charges");
         assert_eq!(tb.residue_class, tc.residue_class, "{id} classes");
+        assert_eq!(tb.polymer_hint, tc.polymer_hint, "{id} polymer hints");
+        assert_eq!(tb.serial, tc.serial, "{id} serials");
+        assert_eq!(tb.occupancy, tc.occupancy, "{id} occupancy");
+        assert_eq!(tb.b_factor, tc.b_factor, "{id} B factors");
+        assert_eq!(tb.residues, tc.residues, "{id} residues");
+        assert_eq!(tb.explicit_bonds, tc.explicit_bonds, "{id} explicit bonds");
         assert_eq!((&tb.id, &tb.title), (&tc.id, &tc.title), "{id} header");
         assert_eq!(b.frame_count(), c.frame_count(), "{id} models");
         assert_same_atoms(id, &b, &c);
@@ -122,5 +128,27 @@ fn a_truncated_file_is_an_error() {
             vv_io::parse(&bytes[..cut], Format::Bcif).is_err(),
             "cut {cut}"
         );
+    }
+}
+
+#[test]
+#[ignore = "needs fixtures/real/4V6X.{bcif,cif.gz}"]
+fn a_large_entry_matches_its_mmcif_atom_for_atom() {
+    let real = |n: &str| {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/real")
+            .join(n)
+    };
+    let b = vv_io::load(real("4V6X.bcif")).unwrap();
+    let c = vv_io::load(real("4V6X.cif.gz")).unwrap();
+    let (tb, tc) = (&b.topology, &c.topology);
+    assert_eq!(tb.atom_count(), tc.atom_count());
+    assert_eq!(tb.chain_count(), tc.chain_count());
+    assert_eq!(tb.name, tc.name);
+    assert_eq!(tb.element, tc.element);
+    assert_eq!(tb.residues, tc.residues);
+    assert_eq!(tb.polymer_hint, tc.polymer_hint);
+    for (pb, pc) in b.frame(0).positions().iter().zip(c.frame(0).positions()) {
+        assert!((*pb - *pc).abs().max_element() < 1e-3);
     }
 }

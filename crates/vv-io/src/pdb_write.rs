@@ -16,6 +16,8 @@ use vv_core::{
 
 use crate::pdb::encode_hybrid36;
 use crate::pdb_names::shorten;
+use crate::pdb_seqres::seqres_lines;
+use crate::polymer_layout::Layout;
 use crate::write::{read_frames, residue_atoms, ss_runs, SsRun};
 
 /// PDB columns 13-16 for one atom: the element symbol occupies columns
@@ -213,6 +215,17 @@ fn residue_name3(topology: &Topology, residue: &ResidueRec) -> String {
 fn segid_field(topology: &Topology, chain: u32) -> &str {
     let segid = topology.segid(chain as usize);
     segid.get(..4).unwrap_or(segid)
+}
+
+/// One warning counting the written chain records whose segment id is cut
+/// to the four characters columns 73-76 hold.
+fn segid_warning(topology: &Topology, included: impl Fn(usize) -> bool) -> Option<String> {
+    let cut = (0..topology.chains.len())
+        .filter(|&c| included(c) && topology.segid(c).len() > 4)
+        .count();
+    (cut > 0).then(|| {
+        format!("{cut} segment id(s) longer than 4 characters were cut (PDB columns 73-76)")
+    })
 }
 
 fn icode_char(residue: &ResidueRec) -> char {
@@ -420,8 +433,15 @@ pub fn write(
         assign_chain_ids(topology, |c| chain_included(topology, atoms, c));
     let (short_names, name_warnings) = shorten(topology, atoms);
     warnings.extend(name_warnings);
+    warnings.extend(segid_warning(topology, |c| {
+        chain_included(topology, atoms, c)
+    }));
     let (plan, new_serial) = build_plan(topology, atoms, &chain_ids);
 
+    let layout = Layout::new(topology, atoms);
+    for line in seqres_lines(topology, &layout, &chain_ids) {
+        write_padded(out, &line)?;
+    }
     for line in ss_lines(topology, &ss_runs(topology, atoms), &chain_ids) {
         write_padded(out, &line)?;
     }

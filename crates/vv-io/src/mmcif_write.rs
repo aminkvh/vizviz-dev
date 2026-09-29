@@ -8,7 +8,9 @@ use std::io::{self, Write};
 use vv_core::fixedbitset::FixedBitSet;
 use vv_core::{flags, ExplicitBondKind, SecondaryStructure, Structure, Topology};
 
-use crate::mmcif::SEGID_ITEM;
+use crate::atom_site::SEGID_ITEM;
+use crate::mmcif_entity_write::write_entity_tables;
+use crate::polymer_layout::Layout;
 use crate::write::{read_frames, residue_atoms, ss_runs, SsRun};
 
 const ATOM_SITE_ITEMS: [&str; 19] = [
@@ -49,7 +51,7 @@ const STRUCT_CONN_ITEMS: [&str; 11] = [
 
 /// Quotes a token that contains an apostrophe (CIF's own quoting
 /// convention); every other token is written bare.
-fn token(s: &str) -> String {
+pub(crate) fn token(s: &str) -> String {
     if s.contains('\'') {
         format!("\"{s}\"")
     } else {
@@ -69,7 +71,7 @@ fn conn_type(kind: ExplicitBondKind) -> &'static str {
 /// category, `lead` gives each row's leading columns (its index is `i`).
 fn write_ss_loop(
     t: &Topology,
-    labels: &[String],
+    labels: &Labels<'_>,
     out: &mut impl Write,
     runs: &[&SsRun],
     category: &str,
@@ -89,7 +91,7 @@ fn write_ss_loop(
             &t.residues[run.first as usize],
             &t.residues[run.last as usize],
         );
-        let asym = &labels[a.chain as usize];
+        let asym = labels.of(run.first as usize);
         writeln!(
             out,
             "{} {asym} {} {} {} {}",
@@ -109,7 +111,7 @@ fn write_ss_loop(
 /// unique `label_seq_id`).
 fn write_secondary_structure(
     t: &Topology,
-    labels: &[String],
+    labels: &Labels<'_>,
     atoms: Option<&FixedBitSet>,
     out: &mut impl Write,
 ) -> io::Result<()> {
@@ -155,24 +157,21 @@ fn segid_cell(t: &Topology, chain: u32, with_segid: bool) -> String {
     }
 }
 
-/// One `label_asym_id` per chain record. A PDB-derived structure can have
-/// several records with one chain name (polymer, then its waters); each
-/// gets its own id so the reader keeps the records apart. `auth_asym_id`
-/// stays the chain name.
-fn label_ids(t: &Topology) -> Vec<String> {
-    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
-    t.chains
-        .iter()
-        .map(|c| {
-            let name = t.names.get(c.label_asym);
-            let unique = std::iter::once(name.to_string())
-                .chain((2..).map(|n| format!("{name}{n}")))
-                .find(|id| !used.contains(id))
-                .expect("unbounded candidates");
-            used.insert(unique.clone());
-            unique
-        })
-        .collect()
+/// The `label_asym_id` of each written residue: one per segment of a chain
+/// record (`Layout::asym_ids`), so a polymer and the ligands and waters
+/// sharing its chain record stay separate. `auth_asym_id` stays the chain
+/// name.
+struct Labels<'a> {
+    layout: &'a Layout,
+    asym: Vec<String>,
+}
+
+impl Labels<'_> {
+    fn of(&self, residue: usize) -> &str {
+        self.layout
+            .segment(residue)
+            .map_or("?", |s| self.asym[s].as_str())
+    }
 }
 
 /// Writes `structure` as mmCIF. `atoms` selects a subset (`None` is every
@@ -198,6 +197,8 @@ pub fn write(
         writeln!(out, "_struct.title '{}'", t.title.replace('\'', ""))?;
     }
     writeln!(out, "#")?;
+    let layout = Layout::new(t, atoms);
+    write_entity_tables(t, &layout, out)?;
     writeln!(out, "loop_")?;
     for item in ATOM_SITE_ITEMS {
         writeln!(out, "_atom_site.{item}")?;
@@ -206,13 +207,17 @@ pub fn write(
     if with_segid {
         writeln!(out, "_atom_site.{SEGID_ITEM}")?;
     }
-    let labels = label_ids(t);
+    let labels = Labels {
+        layout: &layout,
+        asym: layout.asym_ids(t),
+    };
     let held = read_frames(structure, frames)?;
     for (&frame, coords) in frames.iter().zip(&held) {
         let positions = coords.positions();
-        for res in &t.residues {
+        for (ri, res) in t.residues.iter().enumerate() {
             let chain = &t.chains[res.chain as usize];
-            let asym = &labels[res.chain as usize];
+            let asym = labels.of(ri);
+            let entity = layout.segment(ri).map_or(0, |s| layout.entity_of[s] + 1);
             let auth_asym = t.names.get(chain.auth_asym);
             let comp = t.names.get(res.comp);
             let segid = segid_cell(t, res.chain, with_segid);
@@ -237,7 +242,7 @@ pub fn write(
                     t.serial.get(a).copied().unwrap_or(a as u32 + 1),
                     if t.is_deuterium(a) { "D" } else { t.element[a].symbol() },
                     alt.map_or(".".to_string(), |c| (c as char).to_string()),
-                    chain.entity,
+                    entity,
                     res.seq_id,
                     p.x,
                     p.y,
@@ -271,8 +276,9 @@ pub fn write(
         for bond in bonds {
             let partner = |a: u32| {
                 let a = a as usize;
-                let res = &t.residues[t.residue_index[a] as usize];
-                let asym = &labels[res.chain as usize];
+                let ri = t.residue_index[a] as usize;
+                let res = &t.residues[ri];
+                let asym = labels.of(ri);
                 let ins = if res.ins_code == 0 {
                     '?'
                 } else {

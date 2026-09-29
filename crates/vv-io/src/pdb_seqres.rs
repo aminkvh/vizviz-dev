@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 use vv_core::residue_class::{is_standard_polymer, of_name};
 use vv_core::{flags, PolymerHint, ResidueClass, Topology};
 
+use crate::polymer_layout::{sequence, Layout};
+
 /// Monomer names per chain letter, in the residue-name columns of each
 /// `SEQRES` record (13 names of 3 characters from column 20, 4 apart).
 #[derive(Default)]
@@ -51,11 +53,15 @@ impl Seqres {
                 let chain = topology
                     .names
                     .get(topology.chains[res.chain as usize].label_asym);
-                let Some(names) = self.chains.get(chain) else {
-                    return PolymerHint::Unknown;
-                };
                 let comp = topology.names.get(res.comp);
                 let hetero = is_hetero(topology, res.atoms.start as usize);
+                let Some(names) = self.chains.get(chain) else {
+                    return if hetero && is_standard_polymer(comp) {
+                        PolymerHint::NonPolymer
+                    } else {
+                        PolymerHint::Unknown
+                    };
+                };
                 match (names.contains(comp), hetero) {
                     (true, true) if is_standard_polymer(comp) => PolymerHint::NonPolymer,
                     (true, _) => kinds[chain],
@@ -65,6 +71,42 @@ impl Seqres {
             })
             .collect()
     }
+}
+
+/// `SEQRES` records for the polymer segments of `layout`: per PDB chain
+/// character, the residue names in order, 13 to a line (columns: serial
+/// 8-10, chain 12, count 14-17, names from 20).
+pub(crate) fn seqres_lines(topology: &Topology, layout: &Layout, chain_ids: &[u8]) -> Vec<String> {
+    let mut chains: Vec<(u8, Vec<&str>)> = Vec::new();
+    for segment in layout.segments.iter().filter(|s| s.kind.is_polymer()) {
+        let byte = chain_ids[segment.chain as usize];
+        let at = chains
+            .iter()
+            .position(|(b, _)| *b == byte)
+            .unwrap_or_else(|| {
+                chains.push((byte, Vec::new()));
+                chains.len() - 1
+            });
+        for comp in sequence(topology, segment) {
+            let name = topology.names.get(comp);
+            chains[at].1.push(name.get(..3).unwrap_or(name));
+        }
+    }
+    chains
+        .iter()
+        .flat_map(|(byte, names)| {
+            names.chunks(13).enumerate().map(move |(i, chunk)| {
+                let listed: Vec<String> = chunk.iter().map(|n| format!("{n:<3}")).collect();
+                format!(
+                    "SEQRES {:>3} {} {:>4}  {}",
+                    i + 1,
+                    *byte as char,
+                    names.len(),
+                    listed.join(" ")
+                )
+            })
+        })
+        .collect()
 }
 
 fn is_hetero(topology: &Topology, atom: usize) -> bool {

@@ -183,11 +183,11 @@ impl TopologyBuilder {
                 comp: remap[r.comp.0 as usize],
             }
         };
-        let same_residue = self.current.as_ref() == Some(&first_key);
-        let same_chain = self
-            .current
-            .as_ref()
-            .is_some_and(|c| c.asym == first_key.asym);
+        let same_chain = self.current.as_ref().is_some_and(|c| {
+            c.asym == first_key.asym
+                && t.segids.last() == o.segids.first().map(|s| &remap[s.0 as usize])
+        });
+        let same_residue = same_chain && self.current.as_ref() == Some(&first_key);
 
         let residue_base = t.residues.len() as u32 - u32::from(same_residue);
         let chain_base = t.chains.len() as u32 - u32::from(same_chain);
@@ -314,6 +314,27 @@ mod tests {
             charge: 0,
             hetero: false,
         }
+    }
+
+    #[test]
+    fn append_keeps_a_chain_open_only_across_an_equal_segid() {
+        let chunk = |seq: i32, segid: &str| {
+            let mut b = TopologyBuilder::new();
+            let extra = AtomExtra {
+                segid,
+                ..Default::default()
+            };
+            b.push_with(&row("A", seq, "ALA", "N", seq as u32), &extra);
+            b
+        };
+        let mut same = chunk(1, "S1");
+        same.append(chunk(2, "S1"));
+        assert_eq!(same.topology.chains.len(), 1);
+        let mut split = chunk(1, "S1");
+        split.append(chunk(2, "S2"));
+        let t = &split.topology;
+        assert_eq!(t.chains.len(), 2);
+        assert_eq!((t.segid(0), t.segid(1)), ("S1", "S2"));
     }
 
     #[test]

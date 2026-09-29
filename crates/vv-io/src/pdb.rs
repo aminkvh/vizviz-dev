@@ -139,6 +139,25 @@ fn element_of(line: &[u8], name: &[u8]) -> Element {
         .map_or(Element::UNKNOWN, |&b| Element::from_symbol(&[b]))
 }
 
+/// Deuterium from the element column, else (column blank) from the name
+/// field. Only alignments no heavy atom uses count: a lone `D` right-justified
+/// at column 14 (` D  `, ` DA `), or a four-character hydrogen locant
+/// (`DD21`, `DG12`). A two-letter element at column 13 (`DY  `, dysprosium)
+/// is never read as deuterium.
+fn is_deuterium(symbol: &[u8], name: &[u8; 4]) -> bool {
+    match symbol {
+        [] => {
+            let one_letter = name[0] == b' ' && name[1] == b'D';
+            let locant = name[0] == b'D'
+                && name[1].is_ascii_alphabetic()
+                && name[2].is_ascii_digit()
+                && name[3].is_ascii_digit();
+            one_letter || locant
+        }
+        s => matches!(s, b"D" | b"d"),
+    }
+}
+
 /// A LINK record names its two atoms by (chain, residue number, insertion
 /// code, atom name) rather than serial number, so resolving one needs a
 /// lookup built alongside `serial_to_atom` while atoms are read.
@@ -505,7 +524,7 @@ pub fn parse(src: &[u8]) -> Result<Structure, ParseError> {
                 }
                 let extra = AtomExtra {
                     segid: std::str::from_utf8(segid).unwrap_or(""),
-                    deuterium: matches!(field(line, 76, 78), b"D" | b"d"),
+                    deuterium: is_deuterium(field(line, 76, 78), &name),
                     ..Default::default()
                 };
                 let row = AtomRow {

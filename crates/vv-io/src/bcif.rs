@@ -2,15 +2,23 @@
 //!
 //! A file is MessagePack: data blocks of categories of columns, each
 //! column a byte array plus the list of encodings that produced it.
-//! Decoding undoes the encodings last to first. The decoded columns are
-//! re-emitted as CIF text of the first data block with an `_atom_site`
-//! table and read by `mmcif::parse`, so both syntaxes share one reader for
-//! atoms, secondary structure, connectivity, entities and annotations.
+//! Decoding undoes the encodings last to first. `_atom_site` columns feed
+//! the same builder rows as the mmCIF reader (`atom_site`); the few other
+//! categories the reader consumes are decoded to CIF text and handled by
+//! `mmcif::finish`, so both syntaxes agree on secondary structure,
+//! connectivity, entities and annotations by construction.
 
 use std::io::Write;
 
+use rayon::prelude::*;
+use vv_core::Structure;
+
+use crate::atom_site::{assemble, par_chunks, AtomSink, Columns, Fields, Role};
+use crate::float::{parse_f32, parse_i32};
+use crate::mmcif;
+use crate::mmcif_entity::EntityInfo;
 use crate::msgpack::{self, Value};
-use crate::ParseError;
+use crate::{cif, ParseError};
 
 /// A decoded column. Strings are `None` where the file has a null index.
 enum Cells<'a> {
@@ -342,42 +350,175 @@ fn write_category(out: &mut Vec<u8>, category: &Value<'_>) -> Result<(), String>
     Ok(())
 }
 
-fn has_atom_site(block: &Value<'_>) -> bool {
-    block
-        .get("categories")
-        .map_or(&[][..], Value::as_array)
-        .iter()
-        .any(|c| {
-            c.get("name")
-                .and_then(Value::as_str)
-                .map(|n| n.trim_start_matches('_'))
-                == Some("atom_site")
-        })
+impl<'a> Column<'a> {
+    fn present(&self, row: usize) -> bool {
+        self.mask.as_ref().is_none_or(|m| m[row] == 0)
+    }
+
+    fn text(&self, row: usize) -> Option<&'a [u8]> {
+        match &self.cells {
+            Cells::Strings(v) if self.present(row) => v[row].map(str::as_bytes),
+            _ => None,
+        }
+    }
+
+    fn int(&self, row: usize) -> Option<i32> {
+        if !self.present(row) {
+            return None;
+        }
+        match &self.cells {
+            Cells::Ints(v) => i32::try_from(v[row]).ok(),
+            Cells::Floats { values, .. } => Some(values[row] as i32),
+            Cells::Strings(v) => v[row].and_then(|s| parse_i32(s.as_bytes())),
+        }
+    }
+
+    fn float(&self, row: usize) -> Option<f32> {
+        if !self.present(row) {
+            return None;
+        }
+        match &self.cells {
+            Cells::Ints(v) => Some(v[row] as f32),
+            Cells::Floats { values, .. } => Some(values[row] as f32),
+            Cells::Strings(v) => v[row].and_then(|s| parse_f32(s.as_bytes())),
+        }
+    }
 }
 
-/// The first data block with an `_atom_site` table as CIF text.
-pub(crate) fn to_cif(bytes: &[u8]) -> Result<Vec<u8>, ParseError> {
+/// The `_atom_site` columns the reader has a role for, decoded.
+struct AtomTable<'a> {
+    columns: Vec<Column<'a>>,
+    cols: Columns,
+    rows: usize,
+}
+
+struct BcifRow<'r, 'a> {
+    table: &'r AtomTable<'a>,
+    row: usize,
+}
+
+impl<'r, 'a> BcifRow<'r, 'a> {
+    fn column(&self, role: Role) -> Option<&'r Column<'a>> {
+        self.table.cols.of(role).map(|i| &self.table.columns[i])
+    }
+}
+
+impl<'a> Fields<'a> for BcifRow<'_, 'a> {
+    fn text(&self, role: Role) -> Option<&'a [u8]> {
+        self.column(role)?.text(self.row)
+    }
+
+    fn int(&self, role: Role) -> Option<i32> {
+        self.column(role)?.int(self.row)
+    }
+
+    fn float(&self, role: Role) -> Option<f32> {
+        self.column(role)?.float(self.row)
+    }
+}
+
+fn category_name<'a>(category: &Value<'a>) -> Option<&'a str> {
+    category
+        .get("name")
+        .and_then(Value::as_str)
+        .map(|n| n.trim_start_matches('_'))
+}
+
+fn categories<'v, 'a>(block: &'v Value<'a>) -> &'v [Value<'a>] {
+    block.get("categories").map_or(&[][..], Value::as_array)
+}
+
+fn atom_site<'v, 'a>(block: &'v Value<'a>) -> Option<&'v Value<'a>> {
+    categories(block)
+        .iter()
+        .find(|c| category_name(c) == Some("atom_site"))
+}
+
+/// Decodes (in parallel) only the columns of `_atom_site` that have a role.
+fn decode_atom_table<'a>(category: &Value<'a>) -> Result<AtomTable<'a>, ParseError> {
+    let rows = category
+        .get("rowCount")
+        .and_then(Value::as_i64)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(|| bad("category `atom_site` lacks `rowCount`"))?;
+    let wanted: Vec<&Value<'a>> = category
+        .get("columns")
+        .map_or(&[][..], Value::as_array)
+        .iter()
+        .filter(|c| {
+            c.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|n| Role::from_item(n).is_some())
+        })
+        .collect();
+    let columns = wanted
+        .par_iter()
+        .map(|c| decode_column(c, rows))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| bad(format!("category `atom_site`: {e}")))?;
+    let names: Vec<&str> = columns.iter().map(|c| c.name).collect();
+    let cols = Columns::new(&names)?;
+    Ok(AtomTable {
+        columns,
+        cols,
+        rows,
+    })
+}
+
+fn read_atoms(table: &AtomTable<'_>, entity: &EntityInfo) -> Result<Structure, ParseError> {
+    let first = BcifRow { table, row: 0 };
+    let first_model = if table.rows == 0 {
+        1
+    } else {
+        first.int(Role::Model).unwrap_or(1)
+    };
+    let results = par_chunks(table.rows, |range| {
+        let mut sink = AtomSink::new(range.len(), first_model);
+        for row in range {
+            if let Err(message) = sink.push(&BcifRow { table, row }) {
+                return sink.finish(Some(bad(format!("atom_site row {}: {message}", row + 1))));
+            }
+        }
+        sink.finish(None)
+    });
+    assemble(results, entity)
+}
+
+/// The block's other categories the mmCIF reader consumes, as CIF text.
+fn consumed_cif_text(block: &Value<'_>) -> Result<Vec<u8>, ParseError> {
+    let header = block
+        .get("header")
+        .and_then(Value::as_str)
+        .unwrap_or("bcif");
+    let mut out = Vec::new();
+    let _ = writeln!(out, "data_{}", header.replace(char::is_whitespace, "_"));
+    for category in categories(block) {
+        let wanted =
+            category_name(category).is_some_and(|n| n != "atom_site" && mmcif::consumes(n));
+        if wanted {
+            write_category(&mut out, category).map_err(bad)?;
+        }
+    }
+    Ok(out)
+}
+
+/// Reads the first data block with an `_atom_site` table: atoms are decoded
+/// straight into the builder rows the mmCIF reader produces, the few other
+/// categories it uses go through its own category handling.
+pub fn parse(bytes: &[u8]) -> Result<Structure, ParseError> {
     let file = msgpack::decode(bytes).map_err(bad)?;
     let block = file
         .get("dataBlocks")
         .map_or(&[][..], Value::as_array)
         .iter()
-        .find(|b| has_atom_site(b))
+        .find(|b| atom_site(b).is_some())
         .ok_or(ParseError::NoAtoms)?;
-    let header = block
-        .get("header")
-        .and_then(Value::as_str)
-        .unwrap_or("bcif");
-    let mut out = Vec::with_capacity(bytes.len() * 8);
-    let _ = writeln!(out, "data_{}", header.replace(char::is_whitespace, "_"));
-    for category in block.get("categories").map_or(&[][..], Value::as_array) {
-        write_category(&mut out, category).map_err(bad)?;
-    }
-    Ok(out)
-}
-
-pub fn parse(bytes: &[u8]) -> Result<vv_core::Structure, ParseError> {
-    crate::mmcif::parse(&to_cif(bytes)?)
+    let table = decode_atom_table(atom_site(block).expect("found above"))?;
+    let text = consumed_cif_text(block)?;
+    let read = cif::read_block(&text, &[], 0);
+    let entity = EntityInfo::collect(&read.categories);
+    let structure = read_atoms(&table, &entity)?;
+    Ok(mmcif::finish(structure, &read.categories))
 }
 
 #[cfg(test)]

@@ -418,6 +418,85 @@ fn real_binary_cif_matches_mmcif_atom_for_atom() {
     }
 }
 
+// ---- deuterium by name, segid details ------------------------------------------
+
+/// One `HETATM` line with the given name field (columns 13-16) and element.
+fn named_atom(serial: u32, name: &str, element: &str) -> String {
+    format!(
+        "HETATM{serial:>5} {name:<4} LIG A   1    {:>8.3}   0.000   0.000  1.00  0.00      {:<4}{element:>2}\n",
+        serial as f32,
+        ""
+    )
+}
+
+#[test]
+fn blank_element_reads_deuterium_only_from_unambiguous_name_alignments() {
+    let names = [
+        " D  ", " DA ", "DD21", "DY  ", "DUM ", " CD ", "DA  ", " HD2",
+    ];
+    let text: String = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| named_atom(i as u32 + 1, n, ""))
+        .collect();
+    let t = vv_io::pdb::parse(text.as_bytes()).unwrap().topology;
+    let flagged: Vec<bool> = (0..names.len()).map(|a| t.is_deuterium(a)).collect();
+    assert_eq!(
+        flagged,
+        [true, true, true, false, false, false, false, false],
+        "{names:?}"
+    );
+    assert_eq!(t.element[0], Element::HYDROGEN);
+    assert_eq!(t.element[2], Element::HYDROGEN);
+}
+
+#[test]
+fn an_explicit_element_beats_the_name_for_deuterium() {
+    let text = named_atom(1, " D1 ", "C") + &named_atom(2, " CA ", "D");
+    let t = vv_io::pdb::parse(text.as_bytes()).unwrap().topology;
+    assert!(!t.is_deuterium(0) && t.is_deuterium(1));
+}
+
+const SEGID_HEAD: &str = "data_x
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.vizviz_segid
+";
+
+#[test]
+fn a_segid_over_four_characters_is_cut_with_a_warning() {
+    let rows = "ATOM 1 N N ALA A 1 0.0 0.0 0.0 LONGSEG\nATOM 2 N N ALA B 1 5.0 0.0 0.0 PRO\n";
+    let s = cif(&format!("{SEGID_HEAD}{rows}"));
+    let mut out = Vec::new();
+    let warnings = vv_io::pdb_write::write(&s, None, &[0], &mut out).unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("1 segment id"));
+    let text = String::from_utf8(out).unwrap();
+    assert!(text
+        .lines()
+        .any(|l| l.starts_with("ATOM") && l.contains(" LONG")));
+    let (_, none) = round_trip(&load("md_segments.pdb"), "pdb");
+    assert!(none.iter().all(|w| !w.contains("segment id")), "{none:?}");
+}
+
+#[test]
+fn a_segid_change_inside_one_mmcif_asym_starts_a_new_chain_record() {
+    let rows = "ATOM 1 N N ALA A 1 0.0 0.0 0.0 SEGA\nATOM 2 N N GLY A 2 1.0 0.0 0.0 SEGA\nATOM 3 N N SER A 3 2.0 0.0 0.0 SEGB\n";
+    let t = cif(&format!("{SEGID_HEAD}{rows}")).topology;
+    let segids: Vec<&str> = (0..t.chain_count()).map(|c| t.segid(c)).collect();
+    assert_eq!(segids, ["SEGA", "SEGB"]);
+    assert_eq!(t.chain_name(0), t.chain_name(1));
+}
+
 #[test]
 fn format_is_picked_from_the_bcif_extension() {
     assert_eq!(Format::from_path(&small("x.bcif")), Some(Format::Bcif));
