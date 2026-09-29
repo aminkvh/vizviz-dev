@@ -199,22 +199,61 @@ fn paint_corner_triangle(painter: &egui::Painter, rect: egui::Rect, color: Color
     ));
 }
 
-/// Joined icon-only buttons, one of them selected, each with its tooltip.
-/// Returns the option clicked.
-pub fn icon_segmented(ui: &mut Ui, options: &[(&str, &str)], selected: usize) -> Option<usize> {
-    let mut picked = None;
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.x = 0.0;
-        ui.horizontal(|ui| {
-            for (i, (glyph, tip)) in options.iter().enumerate() {
-                let r = icon_button(ui, glyph, selected == i).on_hover_text(*tip);
-                if r.clicked() {
-                    picked = Some(i);
-                }
-            }
-        });
-    });
-    picked
+/// Width shared by every captioned icon cell, wide enough for the longest
+/// caption ("Expression").
+pub const CELL_WIDTH: f32 = 60.0;
+/// Cell heights: `Compact` fits two rows in a ribbon body, `Tall` one row.
+pub const CELL_COMPACT: f32 = 40.0;
+pub const CELL_TALL: f32 = 56.0;
+
+/// An icon over a caption in a `CELL_WIDTH` cell of the given height; the
+/// icon is larger in a tall cell. With `flyout`, a corner triangle marks a
+/// group of variants. The caller adds the tooltip.
+pub fn captioned_button(
+    ui: &mut Ui,
+    glyph: &str,
+    caption: &str,
+    height: f32,
+    selected: bool,
+    flyout: bool,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(CELL_WIDTH, height), Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), caption));
+    if ui.is_rect_visible(rect) {
+        let (fill, stroke, fg) = look(ui, &response, Variant::Ghost, selected);
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(radius::CONTROL),
+            fill,
+            stroke,
+            StrokeKind::Inside,
+        );
+        let size = if height > CELL_COMPACT {
+            text::LARGE_ICON
+        } else {
+            text::ICON
+        };
+        let words =
+            ui.painter()
+                .layout_no_wrap(caption.into(), FontId::proportional(text::CAPTION), fg);
+        let icon = ui
+            .painter()
+            .layout_no_wrap(glyph.into(), FontId::proportional(size), fg);
+        let stack = icon.size().y + words.size().y;
+        let top = rect.center().y - stack / 2.0;
+        let center = egui::pos2(rect.center().x, top + icon.size().y / 2.0);
+        paint_centered(ui.painter(), icon, center, fg);
+        let at = egui::pos2(
+            rect.center().x - words.size().x / 2.0,
+            top + stack - words.size().y,
+        );
+        ui.painter().galley(at, words, fg);
+        if flyout {
+            paint_corner_triangle(ui.painter(), rect, fg);
+        }
+        focus_ring(ui, &response, radius::CONTROL);
+    }
+    response
 }
 
 /// Paints `galley` with its drawn shape, not its line box, centred on

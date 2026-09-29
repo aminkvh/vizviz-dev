@@ -642,23 +642,34 @@ pub const TABS: &[RibbonTab] = &[
         shown: None,
         groups: &[
             Group {
-                label: "Select",
-                actions: &[
-                    inline(
-                        "Select tool and pick level",
-                        icon::SELECTION,
-                        "S",
-                        crate::home::select_commands,
-                        crate::home::select_row,
-                    ),
-                    inline(
-                        "Quick select",
-                        icon::SPIRAL,
-                        "Q",
-                        crate::home::quick_commands,
-                        crate::home::quick_row,
-                    ),
-                ],
+                label: "Tool",
+                actions: &[inline(
+                    "Select tool",
+                    icon::SELECTION,
+                    "S",
+                    crate::home::tool_commands,
+                    crate::home::tool_row,
+                )],
+            },
+            Group {
+                label: "Level",
+                actions: &[inline(
+                    "Pick level",
+                    icon::HEXAGON,
+                    "L",
+                    crate::home::level_commands,
+                    crate::home::level_row,
+                )],
+            },
+            Group {
+                label: "Quick select",
+                actions: &[inline(
+                    "Quick select",
+                    icon::SPIRAL,
+                    "Q",
+                    crate::home::quick_commands,
+                    crate::home::quick_row,
+                )],
             },
             Group {
                 label: "View",
@@ -999,7 +1010,7 @@ pub const TABS: &[RibbonTab] = &[
 ];
 
 /// Height of a tab's body: three rows of small actions.
-const BODY_HEIGHT: f32 = 3.0 * crate::theme::CONTROL_HEIGHT;
+pub(crate) const BODY_HEIGHT: f32 = 3.0 * crate::theme::CONTROL_HEIGHT;
 
 /// Which tab is open, and the key-tip state.
 #[derive(Default)]
@@ -1296,14 +1307,13 @@ impl AppUi<'_> {
         let (icons, inline): (Vec<&&Action>, Vec<&&Action>) = rows
             .iter()
             .partition(|a| matches!(a.kind, Kind::IconRun(_)));
-        let count = inline.len() + usize::from(!icons.is_empty());
         ui.vertical(|ui| {
-            ui.add_space(row_padding(count));
             ui.spacing_mut().item_spacing.y = crate::theme::space::TIGHT;
             for action in inline {
                 effect = self.small_action(ui, action, tips, false).or(effect.take());
             }
             if !icons.is_empty() {
+                ui.add_space(row_padding(1));
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = crate::theme::space::TIGHT;
                     for action in icons {

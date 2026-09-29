@@ -333,7 +333,6 @@ impl AppUi<'_> {
             (icon::FRAME_CORNERS, "Reset view", "view reset", None),
         ];
         let mut run: Option<&str> = None;
-        let mut focus_selection = false;
         ui.vertical_centered(|ui| {
             for (glyph, tip, command, tool_mode) in tools {
                 let tip = match shortcut_for(command) {
@@ -345,23 +344,9 @@ impl AppUi<'_> {
                     run = Some(command);
                 }
             }
-            ui.separator();
-            if crate::widgets::icon_button(ui, icon::CURSOR_CLICK, false)
-                .on_hover_text("Add a selection: focuses the Selections panel's field")
-                .clicked()
-            {
-                focus_selection = true;
-            }
         });
         if let Some(command) = run {
             self.run_command_logged(command);
-        }
-        if focus_selection {
-            *self.layout_request = Some(crate::ui::LayoutRequest::OpenPanel(
-                crate::layout::Tab::Selection,
-            ));
-            ui.ctx()
-                .memory_mut(|m| m.request_focus(egui::Id::new(crate::ui::SELECTION_FIELD_ID)));
         }
     }
 }
