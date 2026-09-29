@@ -107,13 +107,15 @@ pub const VIEW_ENTRIES: &[Entry] = &[
         id: "selectmode",
         title: "Selection tool",
         keywords: &["select", "box", "circle", "lasso", "atom", "residue", "chain", "molecule", "drag", "home", "tool", "level"],
-        usage: "selectmode shape click|box|circle|lasso|toggle|next | level atom|residue|chain|molecule|next",
+        usage: "selectmode shape click|box|circle|lasso|toggle|next | level atom|residue|chain|molecule|next | flyout shapes|more",
         help: "Home > Select: what a left drag in the viewport selects. `shape` draws a box, \
                circle or freehand lasso and selects the atoms of the visible reps inside it \
                on release (Shift adds, Ctrl or Alt subtracts); `click` goes back to \
                orbiting, `toggle` switches between `click` and the last shape used, and \
                `next` (the Q key) cycles the shapes. `level` grows the hits to their whole \
-               residues, chains or molecules (connected atoms); `level next` cycles it.",
+               residues, chains or molecules (connected atoms); `level next` cycles it. \
+               `flyout shapes` and `flyout more` open the tool's shape flyout and the Quick \
+               select \"More…\" flyout.",
     },
     Entry {
         id: "ribbon",
@@ -975,6 +977,10 @@ impl AppUi<'_> {
                     self.fetch_dialog.open = true;
                     return Ok(String::new());
                 }
+                "structures" if rest == "menu" => {
+                    self.ribbon.open_structure_menu = true;
+                    return Ok(String::new());
+                }
                 "loadtrajectory" if rest.is_empty() => {
                     self.open_popover("file", "file.trajectory");
                     return Ok(String::new());
@@ -1341,6 +1347,15 @@ impl AppUi<'_> {
                 *self.render_request = Some(request);
                 Ok(line)
             }
+            "selectmode" if rest.starts_with("flyout") => {
+                let key = match rest.strip_prefix("flyout").map(str::trim) {
+                    Some("shapes") => crate::home::SHAPES_FLYOUT,
+                    Some("more") => crate::home::MORE_FLYOUT,
+                    _ => return Err(usage()),
+                };
+                self.open_popover("home", key);
+                Ok(format!("opened the {rest} flyout"))
+            }
             "selectmode" => {
                 self.view.select_tool.set(rest).map_err(|()| usage())?;
                 if self.view.select_tool.draws() {
@@ -1390,6 +1405,7 @@ impl AppUi<'_> {
             }
             "panel" => {
                 let tab = crate::ribbon::panel_named(rest).ok_or_else(usage)?;
+                self.ribbon.focus_expression = tab == Tab::Selection;
                 *self.layout_request = Some(LayoutRequest::OpenPanel(tab));
                 Ok(format!("showing {}", tab.title()))
             }

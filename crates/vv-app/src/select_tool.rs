@@ -12,9 +12,10 @@ use egui::{Color32, Pos2, Stroke};
 use rayon::prelude::*;
 use vv_core::fixedbitset::{Block, FixedBitSet};
 use vv_core::glam::{Mat4, Vec3};
-use vv_core::{select, ResidueRec, Topology};
+use vv_core::{ResidueRec, Topology};
 use vv_scene::{Command, Mask, StructureId};
 
+use crate::gpu_cache::select_atoms;
 use crate::ui::{project_to_pixel, AppUi};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -342,6 +343,20 @@ fn combine(current: Option<&Mask>, hits: FixedBitSet, how: Combine) -> FixedBitS
     out
 }
 
+/// Atoms some visible rep selects and the altloc policy displays.
+fn drawn_atoms(loaded: &vv_scene::LoadedStructure, frame: usize) -> FixedBitSet {
+    let n = loaded.structure.atom_count();
+    let mut drawn = FixedBitSet::with_capacity(n);
+    for rep in loaded.reps.iter().filter(|r| r.visible) {
+        match select_atoms(loaded, rep, frame) {
+            Ok(None) => drawn.insert_range(..),
+            Ok(Some(list)) => list.iter().for_each(|&a| drawn.insert(a as usize)),
+            Err(_) => {}
+        }
+    }
+    drawn
+}
+
 /// The hits among a structure's atoms that some visible rep draws.
 fn visible_hits(
     loaded: &vv_scene::LoadedStructure,
@@ -357,13 +372,7 @@ fn visible_hits(
     let positions = coords.positions();
     let topology = &loaded.structure.topology;
     let mut hits = atoms_inside(positions, view_proj, size, region);
-    let mut shown = FixedBitSet::with_capacity(positions.len());
-    for rep in loaded.reps.iter().filter(|r| r.visible) {
-        if let Ok(expr) = select::parse(&rep.selection) {
-            shown.union_with(&expr.evaluate(topology, positions));
-        }
-    }
-    hits.intersect_with(&shown);
+    hits.intersect_with(&drawn_atoms(loaded, frame));
     match level {
         SelectLevel::Molecule => {
             expand_fragments(&mut hits, &loaded.bonds.fragments(positions.len()))
@@ -489,6 +498,49 @@ mod tests {
             assert_eq!(mask.contains(i), region.contains(x, y), "atom {i}");
         }
         assert!(mask.count_ones(..) > 0);
+    }
+
+    #[test]
+    fn a_region_never_selects_a_hidden_conformer() {
+        use vv_core::altloc::AltlocPolicy;
+        use vv_scene::{CommandHistory, Scene};
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/small/1AKE.pdb");
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::new(10);
+        history
+            .dispatch(&mut scene, Command::LoadStructure { path })
+            .unwrap();
+        let id = scene.structures().next().unwrap().0;
+        let everything = Region::Box {
+            min: p(-1e6, -1e6),
+            max: p(1e6, 1e6),
+        };
+        let view = Mat4::orthographic_rh(-1e3, 1e3, -1e3, 1e3, -1e3, 1e3);
+        let hits = |scene: &Scene| {
+            let loaded = scene.structure(id).unwrap();
+            visible_hits(loaded, view, (100.0, 100.0), &everything, SelectLevel::Atom)
+        };
+        let hidden: Vec<usize> = scene
+            .structure(id)
+            .unwrap()
+            .shown_atoms()
+            .expect("1AKE has conformers")
+            .zeroes()
+            .collect();
+        assert!(!hidden.is_empty());
+        let first = hits(&scene);
+        assert!(hidden.iter().all(|&a| !first.contains(a)));
+        history
+            .dispatch(
+                &mut scene,
+                Command::SetAltloc {
+                    id,
+                    policy: AltlocPolicy::All,
+                },
+            )
+            .unwrap();
+        assert!(hidden.iter().all(|&a| hits(&scene).contains(a)));
     }
 
     /// Chain 0 holds residues 0 and 1 (atoms 0..2, 2..4); chain 1 holds

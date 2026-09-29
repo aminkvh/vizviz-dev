@@ -99,6 +99,30 @@ pub fn visible_atoms(t: &Topology, policy: AltlocPolicy) -> Option<FixedBitSet> 
     Some(keep)
 }
 
+/// Each hidden atom paired with the shown atom of the same name in its
+/// residue. Name-driven lookups (backbone trace, carbonyls) take the first
+/// atom by name, which may be a hidden conformer; the pair lets a caller
+/// draw the shown one in its place.
+pub fn stand_ins(t: &Topology, shown: &FixedBitSet) -> Vec<(u32, u32)> {
+    let mut pairs = Vec::new();
+    for hidden in shown.zeroes() {
+        let res = &t.residues[t.residue_index[hidden] as usize];
+        let name = t.atom_name(hidden);
+        let twin = (res.atoms.start..res.atoms.end)
+            .find(|&a| shown.contains(a as usize) && t.atom_name(a as usize) == name);
+        pairs.extend(twin.map(|a| (hidden as u32, a)));
+    }
+    pairs
+}
+
+/// The conformer labels present in the structure, sorted.
+pub fn labels(t: &Topology) -> Vec<u8> {
+    let mut found: Vec<u8> = t.alt_loc.iter().copied().filter(|&l| l != 0).collect();
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +185,20 @@ mod tests {
         b.push(&atom(1, "CA", 0, 1.0));
         let t = b.finish().unwrap().topology.as_ref().clone();
         assert_eq!(visible_atoms(&t, AltlocPolicy::First), None);
+    }
+
+    #[test]
+    fn a_hidden_atom_stands_in_with_the_shown_conformer_of_its_name() {
+        let t = topology();
+        let first = visible_atoms(&t, AltlocPolicy::First).unwrap();
+        assert_eq!(stand_ins(&t, &first), vec![(1, 2)]);
+        let b = visible_atoms(&t, AltlocPolicy::Label(b'A')).unwrap();
+        assert_eq!(stand_ins(&t, &b), vec![(2, 1)]);
+    }
+
+    #[test]
+    fn labels_lists_each_conformer_once() {
+        assert_eq!(labels(&topology()), vec![b'A', b'B']);
     }
 
     #[test]

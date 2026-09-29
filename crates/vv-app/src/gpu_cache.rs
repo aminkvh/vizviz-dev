@@ -666,7 +666,8 @@ pub(crate) fn tube_mesh_with_density(
     samples_per_residue: usize,
 ) -> (CartoonPlan, CartoonFrame) {
     let structure = &loaded.structure;
-    let trace = vv_core::backbone_trace(&structure.topology, structure.frame(0).positions());
+    let trace = vv_core::backbone_trace(&structure.topology, loaded.drawn_positions(0).positions());
+    let keep = &loaded.trace_keep(keep);
     let all_trace_atoms = trace.segments.iter().flatten().copied();
     let source: Vec<u32> = match keep {
         None => all_trace_atoms.collect(),
@@ -677,7 +678,7 @@ pub(crate) fn tube_mesh_with_density(
     if let Some(keep) = keep {
         plan = plan.filter(|a| keep[a as usize]);
     }
-    let spline = plan.frame(structure.frame(frame).positions());
+    let spline = plan.frame(loaded.drawn_positions(frame).positions());
     (plan, spline)
 }
 
@@ -752,8 +753,9 @@ fn build_tube(
 }
 
 impl TubeGeometry {
-    fn set_frame(&self, ctx: &GpuContext, structure: &Structure, frame: usize) {
-        let spline = self.plan.frame(structure.frame(frame).positions());
+    fn set_frame(&self, ctx: &GpuContext, loaded: &LoadedStructure, frame: usize) {
+        let structure = &loaded.structure;
+        let spline = self.plan.frame(loaded.drawn_positions(frame).positions());
         self.gpu.set_frame(ctx, &spline);
         if let Some(caps) = &self.caps {
             let coords = structure.frame(frame);
@@ -1070,20 +1072,20 @@ fn spawn_skin(
 /// structure, DSSP at that frame for a trajectory.
 fn spawn_cartoon(
     structure: &Structure,
+    positions: Vec<Vec3>,
     frame: usize,
     waker: Option<Waker>,
 ) -> Job<(CartoonPlan, CartoonFrame)> {
     let structure = structure.clone();
-    spawn_job(frame, waker, move || {
-        let coords = structure.frame(frame);
-        let positions = coords.positions();
-        let single_frame = structure.frame_count() == 1;
-        let codes =
-            vv_core::cartoon::secondary_structure(&structure.topology, positions, single_frame);
-        let plan = vv_core::cartoon::plan(&structure.topology, positions, &codes);
-        let spline = plan.frame(positions);
-        (plan, spline)
-    })
+    spawn_job(frame, waker, move || plan_cartoon(&structure, &positions))
+}
+
+fn plan_cartoon(structure: &Structure, positions: &[Vec3]) -> (CartoonPlan, CartoonFrame) {
+    let single_frame = structure.frame_count() == 1;
+    let codes = vv_core::cartoon::secondary_structure(&structure.topology, positions, single_frame);
+    let plan = vv_core::cartoon::plan(&structure.topology, positions, &codes);
+    let spline = plan.frame(positions);
+    (plan, spline)
 }
 
 /// What a rep draws, by style.
@@ -1176,7 +1178,7 @@ pub(crate) fn select_atoms(
     rep: &Rep,
     frame: usize,
 ) -> Result<Atoms, String> {
-    let shown = vv_core::altloc::visible_atoms(&loaded.structure.topology, loaded.altloc);
+    let shown = loaded.shown_atoms();
     let mut bits = if rep.selects_all() {
         match &shown {
             Some(shown) => shown.clone(),
@@ -1308,7 +1310,7 @@ fn occlusion_proxies(
         }
         RepGeometry::Cartoon(c) => {
             // One sphere per residue on the spline, as wide as a ribbon.
-            let keep = keep_mask(&rep.atoms, positions.len());
+            let keep = loaded.trace_keep(&keep_mask(&rep.atoms, positions.len()));
             let radius = 0.5 * vv_core::cartoon::RIBBON_WIDTH;
             out.extend(
                 c.from
@@ -1590,8 +1592,8 @@ impl GpuCache {
         }
         if let Some(model) = &mut entry.cartoon {
             if model.spline_at != frame {
-                let coords = loaded.structure.frame(frame);
-                model.spline = Arc::new(model.plan.frame(coords.positions()));
+                model.spline =
+                    Arc::new(model.plan.frame(loaded.drawn_positions(frame).positions()));
                 model.spline_at = frame;
             }
         }
@@ -1606,7 +1608,13 @@ impl GpuCache {
                     loaded.label
                 ));
             }
-            entry.cartoon_job = Some(spawn_cartoon(&loaded.structure, frame, waker.clone()));
+            let positions = loaded.drawn_positions(frame).positions().to_vec();
+            entry.cartoon_job = Some(spawn_cartoon(
+                &loaded.structure,
+                positions,
+                frame,
+                waker.clone(),
+            ));
         }
     }
 
@@ -1812,7 +1820,7 @@ impl GpuCache {
             SceneRepresentation::Tube => match &r.geometry {
                 RepGeometry::Tube(t) if !recolor => {
                     if moved {
-                        t.set_frame(ctx, structure, frame);
+                        t.set_frame(ctx, loaded, frame);
                     }
                 }
                 _ => {
@@ -1873,7 +1881,7 @@ impl GpuCache {
                 }
                 {
                     let keep = keep_mask(&r.atoms, structure.atom_count());
-                    let filtered = match &keep {
+                    let filtered = match &loaded.trace_keep(&keep) {
                         None => (*model.plan).clone(),
                         Some(keep) => model.plan.filter(|a| keep[a as usize]),
                     };
@@ -2139,9 +2147,9 @@ impl GpuCache {
                     }
                     _ => vv_core::GlycanFrame::default(),
                 };
-                plan.update_into(structure.frame(frame).positions(), &mut frame_buf);
+                plan.update_into(loaded.drawn_positions(frame).positions(), &mut frame_buf);
 
-                let keep_atoms = keep_mask(&r.atoms, structure.atom_count());
+                let keep_atoms = loaded.trace_keep(&keep_mask(&r.atoms, structure.atom_count()));
                 let keep_residue = |residue: u32| match &keep_atoms {
                     None => true,
                     Some(mask) => plan
@@ -2457,6 +2465,114 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count(&scene, "all"), total);
+    }
+
+    /// Four alanines whose second CA has conformers A (0.3, listed first,
+    /// off the chain) and B (0.7, on it): `First` shows B.
+    fn backbone_with_a_split_ca() -> (Scene, vv_scene::StructureId) {
+        let atom = |serial: u32, alt: char, seq: u32, x: f32, y: f32, occ: f32| {
+            format!(
+                "ATOM  {serial:>5}  CA {alt}ALA A{seq:>4}    {x:>8.3}{y:>8.3}{:>8.3}{occ:>6.2}{:>6.2}           C\n",
+                0.0, 0.0
+            )
+        };
+        let text = [
+            atom(1, ' ', 1, 0.0, 0.0, 1.0),
+            atom(2, 'A', 2, 3.8, 2.0, 0.3),
+            atom(3, 'B', 2, 3.8, 0.0, 0.7),
+            atom(4, ' ', 3, 7.6, 0.0, 1.0),
+            atom(5, ' ', 4, 11.4, 0.0, 1.0),
+        ]
+        .concat();
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("vv_split_ca_{}_{n}.pdb", std::process::id());
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, text).unwrap();
+        let mut scene = Scene::new();
+        vv_scene::CommandHistory::new(10)
+            .dispatch(&mut scene, vv_scene::Command::LoadStructure { path })
+            .unwrap();
+        let id = scene.structures().next().unwrap().0;
+        (scene, id)
+    }
+
+    fn all_keep(loaded: &LoadedStructure) -> Option<Vec<bool>> {
+        let atoms = select_atoms(loaded, loaded.rep(), 0).unwrap();
+        keep_mask(&atoms, loaded.structure.atom_count())
+    }
+
+    #[test]
+    fn a_tube_traces_the_shown_conformer_of_a_split_backbone_atom() {
+        let (scene, id) = backbone_with_a_split_ca();
+        let loaded = scene.structure(id).unwrap();
+        let (plan, spline) = tube_mesh(loaded, loaded.rep(), &all_keep(loaded), 0);
+        assert_eq!(plan.spans.len(), 3, "no residue drops out of the tube");
+        assert_eq!(spline.controls[1], Vec3::new(3.8, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_cartoon_traces_the_shown_conformer_of_a_split_backbone_atom() {
+        let (scene, id) = backbone_with_a_split_ca();
+        let loaded = scene.structure(id).unwrap();
+        let drawn = loaded.drawn_positions(0);
+        let (plan, spline) = plan_cartoon(&loaded.structure, drawn.positions());
+        let keep = loaded.trace_keep(&all_keep(loaded)).unwrap();
+        let drawn_plan = plan.filter(|a| keep[a as usize]);
+        assert_eq!(drawn_plan.spans.len(), plan.spans.len());
+        assert_eq!(spline.controls[1], Vec3::new(3.8, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_hidden_conformer_is_not_in_any_drawn_atom_list() {
+        let (scene, id) = backbone_with_a_split_ca();
+        let loaded = scene.structure(id).unwrap();
+        let drawn = select_atoms(loaded, loaded.rep(), 0).unwrap().unwrap();
+        assert!(!drawn.contains(&1), "conformer A of residue 2 is hidden");
+        assert!(drawn.contains(&2));
+    }
+
+    #[test]
+    fn a_hidden_conformer_is_not_drawn_or_pickable_in_any_rep() {
+        use vv_scene::{Command, CommandHistory, Representation as R};
+        let Some(ctx) = gpu_context() else { return };
+        let renderer = vv_render::Renderer::new(ctx.clone(), 64, 64);
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/small/1AKE.pdb");
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::new(10);
+        history
+            .dispatch(&mut scene, Command::LoadStructure { path })
+            .unwrap();
+        let id = scene.structures().next().unwrap().0;
+        let rep = scene.structure(id).unwrap().reps[0].id;
+        let hidden: Vec<u32> = {
+            let loaded = scene.structure(id).unwrap();
+            let shown = loaded.shown_atoms().expect("1AKE has conformers");
+            shown.zeroes().map(|a| a as u32).collect()
+        };
+        for representation in [R::Spacefill, R::Sticks, R::Lines, R::BallAndStick] {
+            let set = Command::SetRepresentation {
+                id,
+                rep,
+                representation,
+            };
+            history.dispatch(&mut scene, set).unwrap();
+            let mut cache = GpuCache::default();
+            cache.sync(&scene, &ctx, &renderer, false);
+            let (sources, ..) = cache.draw_items(&scene);
+            for source in &sources {
+                let atoms = source.atom_map.iter().flat_map(|m| m.iter().copied());
+                let bonded = source
+                    .bond_atoms
+                    .iter()
+                    .flat_map(|p| p.iter().flatten().copied());
+                assert!(
+                    atoms.chain(bonded).all(|a| !hidden.contains(&a)),
+                    "{representation:?} draws a hidden conformer"
+                );
+            }
+        }
     }
 
     /// Playback (`Scene::set_frame_live`) keeps advancing a hidden

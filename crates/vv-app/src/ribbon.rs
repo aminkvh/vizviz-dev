@@ -60,9 +60,6 @@ pub enum Kind {
         body: PopoverBody,
         ellipsis: bool,
     },
-    /// An icon-only button running one command; its label is the tooltip.
-    /// Icon buttons of a group share one row.
-    IconRun(&'static str),
     /// A row of compact controls drawn by `body`, which returns the
     /// command line a click chose; `commands` lists every command it can
     /// run (the first is what its key tip runs).
@@ -139,21 +136,6 @@ const fn big(
         tip,
         kind: Kind::Run(cmd),
         big: true,
-    }
-}
-
-const fn icon_run(
-    label: &'static str,
-    icon: &'static str,
-    tip: &'static str,
-    cmd: &'static str,
-) -> Action {
-    Action {
-        label,
-        icon,
-        tip,
-        kind: Kind::IconRun(cmd),
-        big: false,
     }
 }
 
@@ -673,17 +655,23 @@ pub const TABS: &[RibbonTab] = &[
             },
             Group {
                 label: "View",
-                actions: &[
-                    icon_run("Reset view", icon::FRAME_CORNERS, "R", "view reset"),
-                    icon_run("Screenshot", icon::CAMERA, "I", "screenshot"),
-                ],
+                actions: &[inline(
+                    "Reset and screenshot",
+                    icon::FRAME_CORNERS,
+                    "R",
+                    crate::home::view_commands,
+                    crate::home::view_row,
+                )],
             },
             Group {
                 label: "Edit",
-                actions: &[
-                    icon_run("Undo", icon::ARROW_COUNTER_CLOCKWISE, "Z", "undo"),
-                    icon_run("Redo", icon::ARROW_CLOCKWISE, "Y", "redo"),
-                ],
+                actions: &[inline(
+                    "Undo and redo",
+                    icon::ARROW_COUNTER_CLOCKWISE,
+                    "Z",
+                    crate::home::edit_commands,
+                    crate::home::edit_row,
+                )],
             },
         ],
     },
@@ -1027,6 +1015,11 @@ pub struct RibbonState {
     /// A popover a deep link (e.g. `look lights`) asked to force open, by
     /// its `Kind::Popover` key; consumed the next time that action draws.
     pub pending_popover: Option<&'static str>,
+    /// Set by `panel selection`: the Selections panel's expression field
+    /// takes keyboard focus the next time it draws.
+    pub focus_expression: bool,
+    /// Set by `structures menu`: the current structure row's ⋯ menu opens.
+    pub open_structure_menu: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1099,7 +1092,7 @@ fn with_current_override(line: String, app: &AppUi<'_>) -> String {
 
 fn activate(action: &Action, app: &AppUi<'_>, option: Option<usize>) -> Option<Effect> {
     match &action.kind {
-        Kind::Run(cmd) | Kind::IconRun(cmd) => Some(Effect::Run((*cmd).into())),
+        Kind::Run(cmd) => Some(Effect::Run((*cmd).into())),
         Kind::Inline { commands, .. } => commands().first().map(|c| Effect::Run((*c).into())),
         Kind::Prompt(text) => Some(Effect::Prompt(text)),
         Kind::Toggle { on, off, state } | Kind::SwitchEffect { on, off, state, .. } => {
@@ -1300,26 +1293,13 @@ impl AppUi<'_> {
         effect
     }
 
-    /// Compact rows (`is_row`) one above the other, icon buttons sharing
-    /// a row, the whole block centered in the ribbon's body height.
+    /// Compact rows (`is_row`) one above the other.
     fn row_column(&mut self, ui: &mut Ui, rows: &[&Action], tips: KeyTips) -> Option<Effect> {
         let mut effect = None;
-        let (icons, inline): (Vec<&&Action>, Vec<&&Action>) = rows
-            .iter()
-            .partition(|a| matches!(a.kind, Kind::IconRun(_)));
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = crate::theme::space::TIGHT;
-            for action in inline {
+            for action in rows {
                 effect = self.small_action(ui, action, tips, false).or(effect.take());
-            }
-            if !icons.is_empty() {
-                ui.add_space(row_padding(1));
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = crate::theme::space::TIGHT;
-                    for action in icons {
-                        effect = self.small_action(ui, action, tips, false).or(effect.take());
-                    }
-                });
             }
         });
         effect
@@ -1502,16 +1482,6 @@ impl AppUi<'_> {
                 self.popover_ui(ui, &r, key, body);
                 None
             }
-            Kind::IconRun(_) => {
-                let enabled = self.action_enabled(action);
-                let r = ui
-                    .add_enabled_ui(enabled, |ui| widgets::icon_button(ui, action.icon, false))
-                    .inner;
-                with_help(r, action)
-                    .clicked()
-                    .then(|| activate(action, self, None))
-                    .flatten()
-            }
             Kind::Inline { body, .. } => {
                 let body = *body;
                 ui.horizontal(|ui| {
@@ -1550,20 +1520,13 @@ impl AppUi<'_> {
 
 /// Whether an action draws as a compact row instead of a stacked button.
 fn is_row(action: &Action) -> bool {
-    matches!(action.kind, Kind::IconRun(_) | Kind::Inline { .. })
-}
-
-/// Space above `rows` control rows so they sit centered in `BODY_HEIGHT`.
-fn row_padding(rows: usize) -> f32 {
-    let gaps = rows.saturating_sub(1) as f32;
-    let used = rows as f32 * crate::theme::CONTROL_HEIGHT + gaps * crate::theme::space::TIGHT;
-    ((BODY_HEIGHT - used) / 2.0).max(0.0)
+    matches!(action.kind, Kind::Inline { .. })
 }
 
 /// The command an action runs first, whose help is its tooltip.
 fn first_command(action: &Action) -> &'static str {
     match &action.kind {
-        Kind::Run(c) | Kind::IconRun(c) | Kind::Prompt(c) | Kind::Color { verb: c, .. } => c,
+        Kind::Run(c) | Kind::Prompt(c) | Kind::Color { verb: c, .. } => c,
         Kind::Inline { commands, .. } => commands().first().copied().unwrap_or(""),
         Kind::Toggle { on, .. } | Kind::SwitchEffect { on, .. } => on,
         Kind::Choice { options, .. } => options[0].1,
@@ -1738,7 +1701,7 @@ mod tests {
             "showstructure",
             "the Structures panel row's own eye is its clickable form",
         ),
-        ("altloc", "command line only (no panel yet)"),
+        ("altloc", "a structure row's ⋯ ▸ Conformer"),
         ("selrep", "a Selections row's ⋯ ▸ Edit expression"),
         ("currep", "clicking a row in the Selections panel"),
         ("showrep", "a selection row's own eye is its clickable form"),
@@ -1779,7 +1742,7 @@ mod tests {
 
     fn commands_of(action: &Action) -> Vec<&'static str> {
         match &action.kind {
-            Kind::Run(c) | Kind::IconRun(c) | Kind::Prompt(c) | Kind::Color { verb: c, .. } => {
+            Kind::Run(c) | Kind::Prompt(c) | Kind::Color { verb: c, .. } => {
                 vec![c]
             }
             Kind::Inline { commands, .. } => commands(),

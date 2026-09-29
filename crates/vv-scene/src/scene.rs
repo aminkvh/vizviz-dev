@@ -2,9 +2,12 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use vv_core::altloc::AltlocPolicy;
-use vv_core::{BondTable, Structure};
+use vv_core::fixedbitset::FixedBitSet;
+use vv_core::glam::Vec3;
+use vv_core::{BondTable, CoordSet, Structure};
 
 use crate::selection::{Mask, SelectionSet};
 use crate::slotmap::{Id, SlotMap};
@@ -444,6 +447,49 @@ impl LoadedStructure {
             measurements: Vec::new(),
             frame: 0,
         }
+    }
+
+    /// The atoms the altloc policy displays, or `None` when all are. The
+    /// one mask every drawing, picking and selecting path shares.
+    pub fn shown_atoms(&self) -> Option<FixedBitSet> {
+        vv_core::altloc::visible_atoms(&self.structure.topology, self.altloc)
+    }
+
+    /// `atoms` without the ones the altloc policy hides.
+    pub fn only_shown(&self, atoms: &[u32]) -> Vec<u32> {
+        let shown = self.shown_atoms();
+        atoms
+            .iter()
+            .copied()
+            .filter(|&a| shown.as_ref().is_none_or(|s| s.contains(a as usize)))
+            .collect()
+    }
+
+    /// Coordinates of `frame` with each hidden conformer atom moved onto
+    /// the shown one it stands in for (`vv_core::altloc::stand_ins`), so
+    /// geometry found by atom name follows the displayed conformer.
+    pub fn drawn_positions(&self, frame: usize) -> Arc<CoordSet> {
+        let coords = self.structure.frame(frame);
+        let Some(shown) = self.shown_atoms() else {
+            return coords;
+        };
+        let mut out: Vec<Vec3> = coords.positions().to_vec();
+        for (hidden, twin) in vv_core::altloc::stand_ins(&self.structure.topology, &shown) {
+            out[hidden as usize] = out[twin as usize];
+        }
+        Arc::new(CoordSet::new(out))
+    }
+
+    /// `keep` (per-atom, `None` for all) with each hidden trace atom
+    /// answering for its stand-in, for filters over name-found atoms.
+    pub fn trace_keep(&self, keep: &Option<Vec<bool>>) -> Option<Vec<bool>> {
+        let mut keep = keep.clone()?;
+        if let Some(shown) = self.shown_atoms() {
+            for (hidden, twin) in vv_core::altloc::stand_ins(&self.structure.topology, &shown) {
+                keep[hidden as usize] = keep[twin as usize];
+            }
+        }
+        Some(keep)
     }
 
     /// The rep that edits apply to.

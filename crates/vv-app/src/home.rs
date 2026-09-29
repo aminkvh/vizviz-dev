@@ -157,6 +157,42 @@ const QUICK: [QuickItem; 8] = [
     },
 ];
 
+/// The classes behind the quick-select grid's "More…" cell.
+const MORE: [QuickItem; 4] = [
+    QuickItem {
+        icon: icon::ROWS,
+        label: "Membrane",
+        name: "membrane lipids",
+        replace: "select membrane",
+        add: "select add membrane",
+    },
+    QuickItem {
+        icon: icon::PUZZLE_PIECE,
+        label: "Cofactor",
+        name: "cofactors",
+        replace: "select cofactor",
+        add: "select add cofactor",
+    },
+    QuickItem {
+        icon: icon::WAVES,
+        label: "Solvent",
+        name: "water and ions",
+        replace: "select solvent",
+        add: "select add solvent",
+    },
+    QuickItem {
+        icon: icon::TREE_STRUCTURE,
+        label: "Polymer",
+        name: "protein and nucleic acid",
+        replace: "select polymer",
+        add: "select add polymer",
+    },
+];
+
+/// Keys `selectmode flyout` forces open through `RibbonState::pending_popover`.
+pub const SHAPES_FLYOUT: &str = "home.shapes";
+pub const MORE_FLYOUT: &str = "home.more";
+
 const INVERT: &str = "select invert";
 const CLEAR: &str = "clear";
 const CYCLE_SHAPE: &str = "selectmode shape next";
@@ -179,10 +215,10 @@ pub fn level_commands() -> Vec<&'static str> {
 /// Every command the quick-select group can run; the first is what its
 /// key tip runs.
 pub fn quick_commands() -> Vec<&'static str> {
-    QUICK
-        .iter()
+    let classes = || QUICK.iter().chain(&MORE);
+    classes()
         .map(|q| q.replace)
-        .chain(QUICK.iter().map(|q| q.add))
+        .chain(classes().map(|q| q.add))
         .chain([INVERT, CLEAR])
         .collect()
 }
@@ -196,6 +232,99 @@ fn in_body<R>(ui: &mut Ui, height: f32, add_cells: impl FnOnce(&mut Ui) -> R) ->
         add_cells(ui)
     })
     .inner
+}
+
+struct CommandCell {
+    icon: &'static str,
+    label: &'static str,
+    tip: &'static str,
+    command: &'static str,
+}
+
+const VIEW: [CommandCell; 2] = [
+    CommandCell {
+        icon: icon::FRAME_CORNERS,
+        label: "Reset",
+        tip: "Reset the view to frame everything",
+        command: "view reset",
+    },
+    CommandCell {
+        icon: icon::CAMERA,
+        label: "Screenshot",
+        tip: "Save an image of the viewport",
+        command: "screenshot",
+    },
+];
+
+const EDIT: [CommandCell; 2] = [
+    CommandCell {
+        icon: icon::ARROW_COUNTER_CLOCKWISE,
+        label: "Undo",
+        tip: "Undo the last change",
+        command: "undo",
+    },
+    CommandCell {
+        icon: icon::ARROW_CLOCKWISE,
+        label: "Redo",
+        tip: "Redo the change just undone",
+        command: "redo",
+    },
+];
+
+/// Every command the view group can run; the first is what its key tip
+/// runs.
+pub fn view_commands() -> Vec<&'static str> {
+    VIEW.iter().map(|c| c.command).collect()
+}
+
+/// Every command the edit group can run; the first is what its key tip
+/// runs.
+pub fn edit_commands() -> Vec<&'static str> {
+    EDIT.iter().map(|c| c.command).collect()
+}
+
+pub fn view_row(_app: &mut AppUi<'_>, ui: &mut Ui) -> Option<String> {
+    command_cells(ui, &VIEW, |_| true)
+}
+
+pub fn edit_row(app: &mut AppUi<'_>, ui: &mut Ui) -> Option<String> {
+    let can = |command: &str| match command {
+        "undo" => app.history.can_undo() || app.app_history.can_undo(),
+        _ => app.history.can_redo() || app.app_history.can_redo(),
+    };
+    command_cells(ui, &EDIT, can)
+}
+
+/// One tall captioned cell per command, greyed out when `enabled` says so.
+fn command_cells(
+    ui: &mut Ui,
+    cells: &[CommandCell],
+    enabled: impl Fn(&str) -> bool,
+) -> Option<String> {
+    in_body(ui, widgets::CELL_TALL, |ui| {
+        ui.horizontal(|ui| {
+            let mut line = None;
+            for c in cells {
+                let cell = ui
+                    .add_enabled_ui(enabled(c.command), |ui| {
+                        widgets::captioned_button(
+                            ui,
+                            c.icon,
+                            c.label,
+                            widgets::CELL_TALL,
+                            false,
+                            false,
+                        )
+                    })
+                    .inner;
+                if cell.on_hover_text(c.tip).clicked() {
+                    line = Some(c.command.to_owned());
+                }
+            }
+            line
+        })
+        .inner
+    })
 }
 
 /// The select-tool button and the expression shortcut.
@@ -222,12 +351,7 @@ fn expression_button(ui: &mut Ui) -> Option<String> {
         false,
     )
     .on_hover_text("Type a selection expression: opens the Selections panel and focuses its field");
-    if !response.clicked() {
-        return None;
-    }
-    ui.ctx()
-        .memory_mut(|m| m.request_focus(Id::new(crate::ui::SELECTION_FIELD_ID)));
-    Some("panel selection".into())
+    response.clicked().then(|| "panel selection".into())
 }
 
 /// The pick-level choice: one cell per level, the current one selected.
@@ -264,12 +388,65 @@ pub fn quick_row(app: &mut AppUi<'_>, ui: &mut Ui) -> Option<String> {
         in_body(ui, height, |ui| {
             ui.horizontal_top(|ui| {
                 let classes = class_grid(ui, add);
-                classes.or(invert_and_clear(ui))
+                let stacked = invert_and_clear(ui);
+                classes.or(stacked).or(more_cell(app, ui, add))
             })
             .inner
         })
     })
     .inner
+}
+
+/// Takes the deep link for the flyout `key`, if one is pending.
+fn take_deep_link(app: &mut AppUi<'_>, key: &'static str) -> bool {
+    let asked = app.ribbon.pending_popover == Some(key);
+    if asked {
+        app.ribbon.pending_popover = None;
+    }
+    asked
+}
+
+/// The "More…" cell, vertically centered beside the grid: a flyout of the
+/// classes that have no cell of their own.
+fn more_cell(app: &mut AppUi<'_>, ui: &mut Ui, add: bool) -> Option<String> {
+    let height = 2.0 * widgets::CELL_COMPACT + crate::theme::space::TIGHT;
+    ui.add_space(crate::theme::space::TIGHT);
+    let cell = ui
+        .vertical(|ui| {
+            ui.add_space((height - widgets::CELL_TALL) / 2.0);
+            widgets::captioned_button(
+                ui,
+                icon::DOTS_THREE,
+                "More…",
+                widgets::CELL_TALL,
+                false,
+                true,
+            )
+            .on_hover_text("More classes: membrane, cofactor, solvent, polymer")
+        })
+        .inner;
+    let popup = Id::new(MORE_FLYOUT);
+    if take_deep_link(app, MORE_FLYOUT) {
+        egui::Popup::open_id(ui.ctx(), popup);
+    }
+    egui::Popup::from_toggle_button_response(&cell)
+        .id(popup)
+        .close_behavior(PopupCloseBehavior::CloseOnClick)
+        .show(|ui| more_flyout(ui, add))?
+        .inner
+}
+
+fn more_flyout(ui: &mut Ui, add: bool) -> Option<String> {
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let mut picked = None;
+    for item in &MORE {
+        let tip = format!("Select {}. Shift-click adds to the selection.", item.name);
+        let r = widgets::button_selected(ui, item.icon, item.label, Variant::Ghost, false);
+        if r.on_hover_text(tip).clicked() {
+            picked = Some(if add { item.add } else { item.replace }.to_owned());
+        }
+    }
+    picked
 }
 
 fn class_grid(ui: &mut Ui, add: bool) -> Option<String> {
@@ -330,7 +507,8 @@ fn invert_and_clear(ui: &mut Ui) -> Option<String> {
 /// The grouped tool button: a click switches the tool on or off, a press
 /// on its corner or a long press opens the flyout of shapes (right-click
 /// too). The flyout outlives the press that opened it.
-fn tool_button(app: &AppUi<'_>, ui: &mut Ui) -> Option<String> {
+fn tool_button(app: &mut AppUi<'_>, ui: &mut Ui) -> Option<String> {
+    let deep_link = take_deep_link(app, SHAPES_FLYOUT);
     let tool = app.view.select_tool;
     let item = SHAPES.iter().find(|s| s.shape == tool.shape)?;
     let response = widgets::captioned_button(
@@ -346,8 +524,14 @@ fn tool_button(app: &AppUi<'_>, ui: &mut Ui) -> Option<String> {
     let by_press = flyout_requested(&ctx, &response);
     let opened_by_press = release_after_flyout_press(&ctx, &response, by_press);
     let toggle = (response.clicked() && !opened_by_press).then(|| "selectmode shape toggle".into());
-    let open = by_press || response.secondary_clicked();
-    let picked = show_flyout(&ctx, &response, open, opened_by_press, tool.shape);
+    let open = by_press || response.secondary_clicked() || deep_link;
+    let picked = show_flyout(
+        &ctx,
+        &response,
+        open,
+        opened_by_press || deep_link,
+        tool.shape,
+    );
     toggle.or(picked)
 }
 
@@ -452,7 +636,7 @@ mod tests {
 
     #[test]
     fn quick_select_pairs_a_replace_and_an_add_form() {
-        for q in &QUICK {
+        for q in QUICK.iter().chain(&MORE) {
             let expr = q.replace.strip_prefix("select ").unwrap();
             assert_eq!(q.add, format!("select add {expr}"));
         }
@@ -462,11 +646,13 @@ mod tests {
     fn icons_and_tooltips_are_unique() {
         let mut glyphs: Vec<&str> = SHAPES.iter().map(|s| s.icon).collect();
         glyphs.extend(LEVELS.iter().map(|l| l.icon));
-        glyphs.extend(QUICK.iter().map(|q| q.icon));
+        glyphs.extend(QUICK.iter().chain(&MORE).map(|q| q.icon));
+        glyphs.extend(VIEW.iter().chain(&EDIT).map(|c| c.icon));
         glyphs.extend([
             icon::SELECTION_INVERSE,
             icon::SELECTION_SLASH,
             icon::CURSOR_TEXT,
+            icon::DOTS_THREE,
         ]);
         let mut tips: Vec<&str> = SHAPES.iter().map(|s| s.tip).collect();
         tips.extend(LEVELS.iter().map(|l| l.tip));
@@ -484,12 +670,15 @@ mod tests {
             .into_iter()
             .chain(level_commands())
             .chain(quick_commands())
+            .chain(view_commands())
+            .chain(edit_commands())
         {
             crate::commands::validate(c).unwrap();
         }
         let mut labels: Vec<&str> = LEVELS.iter().map(|l| l.label).collect();
-        labels.extend(QUICK.iter().map(|q| q.label));
-        labels.extend(["Invert", "Clear", "Expression"]);
+        labels.extend(QUICK.iter().chain(&MORE).map(|q| q.label));
+        labels.extend(VIEW.iter().chain(&EDIT).map(|c| c.label));
+        labels.extend(["Invert", "Clear", "Expression", "More…"]);
         let n = labels.len();
         labels.sort_unstable();
         labels.dedup();

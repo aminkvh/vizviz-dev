@@ -711,7 +711,11 @@ pub(crate) fn label_draws(scene: &Scene) -> Vec<LabelDraw> {
             .min(loaded.structure.frame_count().saturating_sub(1));
         let coords = loaded.structure.frame(frame);
         let positions = coords.positions();
+        let shown = loaded.shown_atoms();
         for (&atom, text) in &loaded.labels {
+            if !is_shown(&shown, atom) {
+                continue;
+            }
             if let Some(&world) = positions.get(atom as usize) {
                 draws.push(LabelDraw {
                     id,
@@ -723,6 +727,10 @@ pub(crate) fn label_draws(scene: &Scene) -> Vec<LabelDraw> {
         }
     }
     draws
+}
+
+fn is_shown(shown: &Option<vv_core::fixedbitset::FixedBitSet>, atom: u32) -> bool {
+    shown.as_ref().is_none_or(|s| s.contains(atom as usize))
 }
 
 /// One measurement as drawn: the atoms' current-frame positions (the
@@ -746,7 +754,11 @@ pub(crate) fn measurement_draws(scene: &Scene) -> Vec<MeasurementDraw> {
         }
         let coords = loaded.structure.frame(loaded.frame);
         let positions = coords.positions();
+        let shown = loaded.shown_atoms();
         for m in &loaded.measurements {
+            if !m.atoms().iter().all(|&a| is_shown(&shown, a)) {
+                continue;
+            }
             let path: Vec<_> = m.atoms().iter().map(|&a| positions[a as usize]).collect();
             let anchor = match path[..] {
                 [a, b] | [_, a, b, _] => (a + b) * 0.5,
@@ -1320,6 +1332,7 @@ impl AppUi<'_> {
             return;
         };
         let n = loaded.structure.atom_count();
+        let atoms = &loaded.only_shown(atoms);
         let mut bits = match self.scene.active_selection() {
             Some(active) if add && active.structure == id => (*active.mask).clone(),
             _ => (*empty_mask(n)).clone(),
@@ -1500,6 +1513,73 @@ fn rep_option_ui(
         ui.data_mut(|d| d.remove::<f32>(key));
         set.push((o.name, Some(value)));
     }
+}
+
+/// What a structure row's ⋯ menu asked for.
+enum StructurePick {
+    Rename,
+    FileInfo,
+    Export,
+    Conformer(vv_core::altloc::AltlocPolicy),
+    Close,
+}
+
+/// A structure row's ⋯ menu; the Conformer choices appear only for a
+/// structure with alternate locations (`conformers` are its labels).
+fn structure_menu_ui(
+    ui: &mut Ui,
+    altloc: vv_core::altloc::AltlocPolicy,
+    conformers: &[u8],
+) -> Option<StructurePick> {
+    let mut pick = None;
+    for (label, action) in [
+        ("Rename", StructurePick::Rename),
+        ("File info", StructurePick::FileInfo),
+        ("Export structure…", StructurePick::Export),
+    ] {
+        if ui.button(label).clicked() {
+            pick = Some(action);
+        }
+    }
+    if !conformers.is_empty() {
+        ui.separator();
+        ui.weak("Conformer");
+        pick = conformer_menu_ui(ui, altloc, conformers)
+            .map(StructurePick::Conformer)
+            .or(pick);
+        ui.separator();
+    }
+    let danger = crate::theme::Tokens::current(ui.ctx()).danger;
+    if ui.button(RichText::new("Close").color(danger)).clicked() {
+        pick = Some(StructurePick::Close);
+    }
+    pick
+}
+
+/// First (highest occupancy), All, then one entry per label present.
+fn conformer_menu_ui(
+    ui: &mut Ui,
+    now: vv_core::altloc::AltlocPolicy,
+    conformers: &[u8],
+) -> Option<vv_core::altloc::AltlocPolicy> {
+    use vv_core::altloc::AltlocPolicy;
+    let choices = [
+        ("First (highest occupancy)".to_owned(), AltlocPolicy::First),
+        ("All".to_owned(), AltlocPolicy::All),
+    ]
+    .into_iter()
+    .chain(
+        conformers
+            .iter()
+            .map(|&l| (char::from(l).to_string(), AltlocPolicy::Label(l))),
+    );
+    let mut pick = None;
+    for (label, policy) in choices {
+        if ui.selectable_label(policy == now, label).clicked() {
+            pick = Some(policy);
+        }
+    }
+    pick
 }
 
 /// What a selection row's ⋯ menu or eye asked for.
@@ -2422,10 +2502,20 @@ impl AppUi<'_> {
     fn scene_ui(&mut self, ui: &mut Ui) {
         use egui_phosphor::regular as icon;
         let current = self.current();
-        let rows: Vec<(StructureId, String, usize, bool)> = self
+        let rows: Vec<_> = self
             .scene
             .structures()
-            .map(|(id, s)| (id, s.label.clone(), s.structure.atom_count(), s.visible))
+            .map(|(id, s)| {
+                let conformers = vv_core::altloc::labels(&s.structure.topology);
+                (
+                    id,
+                    s.label.clone(),
+                    s.structure.atom_count(),
+                    s.visible,
+                    s.altloc,
+                    conformers,
+                )
+            })
             .collect();
         if rows.is_empty() {
             if widgets::empty_state(ui, icon::ATOM, "No structures yet", "Open a structure") {
@@ -2435,7 +2525,7 @@ impl AppUi<'_> {
         }
         let key = structure_rename_key();
         let renaming = renaming_id::<StructureId>(ui, key);
-        for (id, label, atoms, visible) in rows {
+        for (id, label, atoms, visible, altloc, conformers) in rows {
             if renaming == Some(id) {
                 if let Some(new_label) = inline_rename_ui(ui, key, id, &label) {
                     self.dispatch(Command::SetStructureLabel {
@@ -2446,18 +2536,16 @@ impl AppUi<'_> {
                 continue;
             }
             let row = format!("{label}  ·  {}", count(atoms, "atom"));
-            let mut clicked = None;
+            let mut picked = None;
             let mut toggle = false;
             let pick = widgets::list_row(ui, &row, Some(id) == current, |ui| {
                 // Trailing icons draw right-to-left: the menu first puts
                 // it rightmost, so the eye (left of it) reads "eye, ⋯".
-                let items = [
-                    ("Rename", false),
-                    ("File info", false),
-                    ("Export structure…", false),
-                    ("Close", true),
-                ];
-                clicked = widgets::menu_button(ui, &items).0.map(|i| items[i].0);
+                let more =
+                    widgets::menu(ui, |ui| picked = structure_menu_ui(ui, altloc, &conformers));
+                if std::mem::take(&mut self.ribbon.open_structure_menu) && Some(id) == current {
+                    egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&more));
+                }
                 let eye = if visible { icon::EYE } else { icon::EYE_SLASH };
                 toggle = widgets::button(ui, eye, "", Variant::Ghost)
                     .on_hover_text(if visible {
@@ -2479,23 +2567,27 @@ impl AppUi<'_> {
                     visible: !visible,
                 });
             }
-            match clicked {
-                Some("Rename") => {
+            match picked {
+                Some(StructurePick::Rename) => {
                     ui.data_mut(|d| d.insert_temp(key, (id, label.clone())));
                 }
-                Some("File info") => {
+                Some(StructurePick::FileInfo) => {
                     *self.info_target = Some(id);
                     *self.layout_request = Some(LayoutRequest::OpenPanel(Tab::Info));
                 }
-                Some("Export structure…") => {
+                Some(StructurePick::Export) => {
                     self.export_structure_dialog.structure = Some(id);
                     self.export_structure_dialog.open = true;
                 }
-                Some("Close") => {
+                Some(StructurePick::Conformer(policy)) => {
+                    self.dispatch(Command::SetAltloc { id, policy });
+                    self.undoable(&format!("Showing conformer {policy}."));
+                }
+                Some(StructurePick::Close) => {
                     self.dispatch(Command::CloseStructure { id });
                     self.undoable(&format!("Closed {label}."));
                 }
-                _ => {}
+                None => {}
             }
         }
     }
@@ -2700,6 +2792,9 @@ impl AppUi<'_> {
                 (edit, plus)
             })
             .inner;
+        if std::mem::take(&mut self.ribbon.focus_expression) {
+            edit.request_focus();
+        }
         let t = crate::theme::Tokens::current(ui.ctx());
         match self.add_selection_preview(ui, id, &text) {
             Some(Ok(n)) => {
@@ -4788,5 +4883,57 @@ mod linked_size_tests {
     #[test]
     fn an_unchanged_size_is_left_alone() {
         assert_eq!(linked_size((640, 480), (640, 480)), (640, 480));
+    }
+}
+
+#[cfg(test)]
+mod altloc_annotation_tests {
+    use super::{label_draws, measurement_draws};
+    use vv_scene::{Command, CommandHistory, Measurement, Scene};
+
+    /// 1AKE with a label and a distance on a hidden conformer atom and on
+    /// a shown one.
+    fn scene() -> (Scene, vv_scene::StructureId, u32, u32) {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/small/1AKE.pdb");
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::new(10);
+        history
+            .dispatch(&mut scene, Command::LoadStructure { path })
+            .unwrap();
+        let id = scene.structures().next().unwrap().0;
+        let shown = scene.structure(id).unwrap().shown_atoms().unwrap();
+        let (hidden, kept) = (shown.zeroes().next().unwrap() as u32, 0);
+        for atom in [hidden, kept] {
+            let text = Some(format!("a{atom}"));
+            history
+                .dispatch(&mut scene, Command::SetLabel { id, atom, text })
+                .unwrap();
+        }
+        for pair in [[hidden, kept], [kept, 1]] {
+            let measurement = Measurement::new(pair.to_vec()).unwrap();
+            let set = Command::SetMeasurement {
+                id,
+                measurement,
+                shown: true,
+            };
+            history.dispatch(&mut scene, set).unwrap();
+        }
+        (scene, id, hidden, kept)
+    }
+
+    #[test]
+    fn a_label_or_measurement_on_a_hidden_conformer_is_not_drawn() {
+        let (scene, _, _, kept) = scene();
+        let labels: Vec<u32> = label_draws(&scene).iter().map(|l| l.atom).collect();
+        assert_eq!(labels, vec![kept]);
+        assert_eq!(measurement_draws(&scene).len(), 1);
+    }
+
+    #[test]
+    fn clicks_and_sequence_picks_drop_hidden_conformer_atoms() {
+        let (scene, id, hidden, kept) = scene();
+        let loaded = scene.structure(id).unwrap();
+        assert_eq!(loaded.only_shown(&[hidden, kept]), vec![kept]);
     }
 }

@@ -216,7 +216,7 @@ pub fn trace_scene(scene: &Scene, cache: &GpuCache, quality: Quality) -> TraceIn
                     continue;
                 };
                 let dense = plan.redensify(quality.samples_per_residue());
-                let mesh = match keep_mask(&atoms, n) {
+                let mesh = match loaded.trace_keep(&keep_mask(&atoms, n)) {
                     None => dense.mesh(&spline),
                     Some(keep) => dense.filter(|a| keep[a as usize]).mesh(&spline),
                 };
@@ -285,8 +285,8 @@ pub fn trace_scene(scene: &Scene, cache: &GpuCache, quality: Quality) -> TraceIn
             if rep.representation == Representation::Glycan {
                 let plan = vv_core::GlycanPlan::build(&loaded.structure.topology, &loaded.bonds);
                 let mut glycan_frame = vv_core::GlycanFrame::default();
-                plan.update_into(positions, &mut glycan_frame);
-                let keep = keep_mask(&atoms, n);
+                plan.update_into(loaded.drawn_positions(frame).positions(), &mut glycan_frame);
+                let keep = loaded.trace_keep(&keep_mask(&atoms, n));
                 let keep_residue = |residue: u32| match &keep {
                     None => true,
                     Some(mask) => plan
@@ -520,5 +520,47 @@ impl RenderJob {
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => Some(Err("render: the worker died".into())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vv_core::altloc::AltlocPolicy;
+    use vv_scene::{Command, CommandHistory};
+
+    #[test]
+    fn a_path_traced_render_draws_only_the_shown_conformers() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/small/1AKE.pdb");
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::new(10);
+        history
+            .dispatch(&mut scene, Command::LoadStructure { path })
+            .unwrap();
+        let id = scene.structures().next().unwrap().0;
+        let rep = scene.structure(id).unwrap().reps[0].id;
+        let representation = Representation::Spacefill;
+        let set = Command::SetRepresentation {
+            id,
+            rep,
+            representation,
+        };
+        history.dispatch(&mut scene, set).unwrap();
+        let spheres = |scene: &Scene| {
+            trace_scene(scene, &GpuCache::default(), Quality::Draft)
+                .scene
+                .spheres
+                .len()
+        };
+        let loaded = scene.structure(id).unwrap();
+        let total = loaded.structure.atom_count();
+        let shown = total - loaded.shown_atoms().unwrap().zeroes().count();
+        assert_eq!(spheres(&scene), shown);
+        let policy = AltlocPolicy::All;
+        history
+            .dispatch(&mut scene, Command::SetAltloc { id, policy })
+            .unwrap();
+        assert_eq!(spheres(&scene), total);
     }
 }
