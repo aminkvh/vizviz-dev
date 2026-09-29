@@ -6,6 +6,7 @@
 pub mod altloc;
 pub mod analysis;
 pub mod annotations;
+pub mod antibody;
 pub mod backbone;
 pub mod bonds;
 pub mod builder;
