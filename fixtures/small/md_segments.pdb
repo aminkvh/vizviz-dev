@@ -1,0 +1,21 @@
+REMARK   Hand-written MD-style system: every solute segment reuses chain A,
+REMARK   ions and waters have a blank chain; segment ids in columns 73-76.
+ATOM      1  N   ALA A   1      11.104   6.134  -6.504  1.00  0.00      PROA N
+ATOM      2  CA  ALA A   1      11.639   6.860  -5.360  1.00  0.00      PROA C
+ATOM      3  C   ALA A   1      13.138   6.884  -5.324  1.00  0.00      PROA C
+ATOM      4  O   ALA A   1      13.764   6.255  -6.147  1.00  0.00      PROA O
+ATOM      5  N   GLY A   2      13.720   7.576  -4.379  1.00  0.00      PROA N
+ATOM      6  CA  GLY A   2      15.161   7.697  -4.270  1.00  0.00      PROA C
+ATOM      7  C   GLY A   2      15.700   6.309  -3.997  1.00  0.00      PROA C
+ATOM      8  O   GLY A   2      15.016   5.398  -3.590  1.00  0.00      PROA O
+ATOM      9  N   ALA A   1      21.104   6.134  -6.504  1.00  0.00      PROB N
+ATOM     10  CA  ALA A   1      21.639   6.860  -5.360  1.00  0.00      PROB C
+ATOM     11  C   ALA A   1      23.138   6.884  -5.324  1.00  0.00      PROB C
+HETATM   12 NA   SOD     1      30.000  10.000   5.000  1.00  0.00      IONSNA
+HETATM   13  OH2 TIP3    1       8.000   8.000   8.000  1.00  0.00      SOLV O
+HETATM   14  H1  TIP3    1       8.800   8.300   8.000  1.00  0.00      SOLV H
+HETATM   15  H2  TIP3    1       7.700   8.900   8.000  1.00  0.00      SOLV H
+HETATM   16  OH2 TIP3    2      12.000   2.000   3.000  1.00  0.00      SOLV O
+HETATM   17  H1  TIP3    2      12.800   2.300   3.000  1.00  0.00      SOLV H
+HETATM   18  H2  TIP3    2      11.700   2.900   3.000  1.00  0.00      SOLV H
+END

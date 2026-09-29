@@ -3,6 +3,7 @@
 //! Columnar (SoA) atom storage, chain/residue hierarchy as index ranges,
 //! bitset selections, and geometric bond perception. No GPU, no I/O.
 
+pub mod altloc;
 pub mod analysis;
 pub mod annotations;
 pub mod backbone;
@@ -39,7 +40,7 @@ pub use bonds::{
     adjacency, bond_strand_endpoints, bond_strands, strand_axis, Adjacency, BondOrder, BondStrand,
     BondTable,
 };
-pub use builder::{AtomRow, TopologyBuilder};
+pub use builder::{AtomExtra, AtomRow, TopologyBuilder};
 pub use cartoon::{build as build_cartoon, CartoonMesh};
 pub use coords::CoordSet;
 pub use dssp::{assign as assign_dssp, DsspCode};
@@ -51,7 +52,7 @@ pub use glycan::{
 pub use hbond::{hydrogen_bonds_into, HydrogenBond};
 pub use intern::{InternId, Interner};
 pub use material::MaterialPreset;
-pub use residue_class::{ClassCounts, ResidueClass, Roles};
+pub use residue_class::{ClassCounts, PolymerHint, ResidueClass, Roles};
 pub use select::{select, Expr, SelectError};
 pub use spatial::Grid;
 pub use structure::{FrameSource, Structure, StructureError, DEFAULT_FRAME_BUDGET};

@@ -199,6 +199,49 @@ pub(crate) fn classify_alone(t: &Topology, residue: usize) -> ResidueClass {
         .unwrap_or_default()
 }
 
+/// Whether `name` is a standard amino acid or nucleotide, which a PDB file
+/// writes as `ATOM` in a polymer and as `HETATM` only for a free copy.
+pub fn is_standard_polymer(name: &str) -> bool {
+    names::STANDARD_POLYMER
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(name))
+}
+
+/// What a file's own records say about a residue (mmCIF entity tables,
+/// PDB `SEQRES`); stored per residue in `Topology::polymer_hint`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PolymerHint {
+    #[default]
+    Unknown,
+    /// A monomer of a polypeptide entity, standard or modified.
+    Protein,
+    /// A monomer of a polynucleotide entity, standard or modified.
+    Nucleic,
+    /// Belongs to a non-polymer, branched or water entity: never a
+    /// protein or nucleic residue, whatever its name.
+    NonPolymer,
+    Water,
+}
+
+/// The class the file's records force, if any. A `NonPolymer` hint only
+/// demotes a name-table polymer reading (a free amino acid ligand), so
+/// glycans, lipids and ions keep their name-decided class.
+fn apply_hint(hint: PolymerHint, by_name: Option<ResidueClass>) -> Option<ResidueClass> {
+    match hint {
+        PolymerHint::Unknown => by_name,
+        PolymerHint::Protein => Some(ResidueClass::Protein),
+        PolymerHint::Nucleic => Some(ResidueClass::Nucleic),
+        PolymerHint::Water => Some(ResidueClass::Water),
+        PolymerHint::NonPolymer => match by_name {
+            Some(ResidueClass::Protein | ResidueClass::Nucleic) => {
+                Some(ResidueClass::SmallMolecule)
+            }
+            other => other,
+        },
+    }
+}
+
 /// One class per residue. `positions` (frame 0) lets the structural layer
 /// perceive bonds for the residues no name table knows; an MD topology's
 /// own bond list is used instead when it has one, and with neither the
@@ -213,7 +256,11 @@ pub fn classify(t: &Topology, positions: Option<&[Vec3]>) -> Vec<ResidueClass> {
     let first: Vec<Option<ResidueClass>> = t
         .residues
         .par_iter()
-        .map(|r| by_name[r.comp.0 as usize][size_bucket(r.atoms.len())])
+        .enumerate()
+        .map(|(i, r)| {
+            let hint = t.polymer_hint.get(i).copied().unwrap_or_default();
+            apply_hint(hint, by_name[r.comp.0 as usize][size_bucket(r.atoms.len())])
+        })
         .collect();
     fallback::resolve(t, positions, first)
 }
@@ -288,6 +335,27 @@ mod tests {
         assert_eq!(of_name("PA", 1), None);
         assert_eq!(of_name("AR", 1), None);
         assert_eq!(of_name("LA", 1), None);
+    }
+
+    #[test]
+    fn a_hint_overrides_the_name_only_where_it_must() {
+        use PolymerHint::*;
+        let protein = Some(ResidueClass::Protein);
+        assert_eq!(apply_hint(Unknown, protein), protein);
+        assert_eq!(apply_hint(Protein, None), protein);
+        assert_eq!(apply_hint(Nucleic, protein), Some(ResidueClass::Nucleic));
+        assert_eq!(apply_hint(Water, None), Some(ResidueClass::Water));
+        assert_eq!(
+            apply_hint(NonPolymer, protein),
+            Some(ResidueClass::SmallMolecule)
+        );
+        let glycan = Some(ResidueClass::Glycan);
+        assert_eq!(
+            apply_hint(NonPolymer, glycan),
+            glycan,
+            "only polymer names are demoted"
+        );
+        assert_eq!(apply_hint(NonPolymer, None), None);
     }
 
     #[test]

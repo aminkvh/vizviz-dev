@@ -440,6 +440,7 @@ fn round_trip(s: &Structure, format: Format) -> Structure {
     let ext = match format {
         Format::Pdb => "pdb",
         Format::Mmcif => "cif",
+        Format::Bcif => unreachable!("BinaryCIF is read-only"),
     };
     let path = std::env::temp_dir().join(format!(
         "vv_audit_{}_{}.{ext}",

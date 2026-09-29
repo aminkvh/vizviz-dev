@@ -85,49 +85,85 @@ pub fn locate(id: &str, assembly: Assembly) -> (String, String) {
     )
 }
 
+/// File name in the cache and URL at RCSB's model server for the
+/// asymmetric unit as BinaryCIF.
+pub fn locate_bcif(id: &str) -> (String, String) {
+    let file = format!("{id}.bcif");
+    (file.clone(), format!("https://models.rcsb.org/{file}"))
+}
+
 /// The cached path for `id`, downloading it into `cache` first if it is
 /// not there yet. Never re-downloads: delete the file to refresh.
 pub fn fetch(id: &str, assembly: Assembly, cache: &Path) -> Result<PathBuf, FetchError> {
     let id = normalize_id(id)?;
     let (file, url) = locate(&id, assembly);
-    let path = cache.join(&file);
+    let what = match assembly {
+        Assembly::AsymmetricUnit => "entry".to_string(),
+        Assembly::Biological(n) => format!("assembly {n}"),
+    };
+    download(&id, &what, &url, &cache.join(file))
+}
+
+/// [`fetch`] for the asymmetric unit as BinaryCIF (smaller and faster
+/// to read than the text file).
+pub fn fetch_bcif(id: &str, cache: &Path) -> Result<PathBuf, FetchError> {
+    let id = normalize_id(id)?;
+    let (file, url) = locate_bcif(&id);
+    download(&id, "BinaryCIF entry", &url, &cache.join(file))
+}
+
+fn download(id: &str, what: &str, url: &str, path: &Path) -> Result<PathBuf, FetchError> {
     if path.exists() {
-        return Ok(path);
+        return Ok(path.to_path_buf());
     }
-    let response = match ureq::get(&url).call() {
+    let response = match ureq::get(url).call() {
         Ok(r) => r,
         Err(ureq::Error::StatusCode(status)) => {
-            let what = match assembly {
-                Assembly::AsymmetricUnit => "entry".to_string(),
-                Assembly::Biological(n) => format!("assembly {n}"),
-            };
-            return Err(FetchError::NotFound { id, what, status });
+            return Err(FetchError::NotFound {
+                id: id.to_string(),
+                what: what.to_string(),
+                status,
+            })
         }
-        Err(source) => return Err(FetchError::Http { url, source }),
+        Err(source) => {
+            return Err(FetchError::Http {
+                url: url.to_string(),
+                source,
+            })
+        }
     };
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut response.into_body().into_reader(), &mut bytes).map_err(
         |source| FetchError::Http {
-            url: url.clone(),
+            url: url.to_string(),
             source: source.into(),
         },
     )?;
     let io = |source| FetchError::Io {
-        path: path.clone(),
+        path: path.to_path_buf(),
         source,
     };
-    std::fs::create_dir_all(cache).map_err(io)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(io)?;
+    }
     // Write to a temp name and rename, so a killed download never leaves
     // a truncated file the cache would trust next time.
     let partial = path.with_extension("part");
     std::fs::write(&partial, &bytes).map_err(io)?;
-    std::fs::rename(&partial, &path).map_err(io)?;
-    Ok(path)
+    std::fs::rename(&partial, path).map_err(io)?;
+    Ok(path.to_path_buf())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bcif_names_and_urls() {
+        let (file, url) = locate_bcif("4HHB");
+        assert_eq!(file, "4HHB.bcif");
+        assert_eq!(url, "https://models.rcsb.org/4HHB.bcif");
+    }
 
     #[test]
     fn ids_are_validated_and_upper_cased() {
@@ -169,6 +205,8 @@ mod tests {
         let asym = fetch("1CRN", Assembly::AsymmetricUnit, &dir).unwrap();
         let s = crate::load(&asym).unwrap();
         assert_eq!(s.atom_count(), 327);
+        let bcif = fetch_bcif("1CRN", &dir).unwrap();
+        assert_eq!(crate::load(&bcif).unwrap().atom_count(), 327);
         let bio = fetch("1CRN", Assembly::Biological(1), &dir).unwrap();
         assert!(crate::load(&bio).unwrap().atom_count() >= 327);
         assert!(matches!(

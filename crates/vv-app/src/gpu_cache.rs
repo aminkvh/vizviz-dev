@@ -1156,6 +1156,8 @@ struct Entry {
     /// `Structure::frames_id` of the coordinates everything here was built
     /// from; a different one (an attached trajectory) discards the entry.
     coords: usize,
+    /// The altloc policy `reps` were selected under; a change discards the entry.
+    altloc: vv_core::altloc::AltlocPolicy,
     /// The whole structure's cartoon, and its plan being built.
     cartoon: Option<CartoonModel>,
     cartoon_job: Option<Job<(CartoonPlan, CartoonFrame)>>,
@@ -1174,15 +1176,23 @@ pub(crate) fn select_atoms(
     rep: &Rep,
     frame: usize,
 ) -> Result<Atoms, String> {
-    if rep.selects_all() {
-        return Ok(None);
+    let shown = vv_core::altloc::visible_atoms(&loaded.structure.topology, loaded.altloc);
+    let mut bits = if rep.selects_all() {
+        match &shown {
+            Some(shown) => shown.clone(),
+            None => return Ok(None),
+        }
+    } else {
+        vv_core::select(
+            &loaded.structure.topology,
+            loaded.structure.frame(frame).positions(),
+            &rep.selection,
+        )
+        .map_err(|e| format!("{}: rep selection `{}`: {e}", loaded.label, rep.selection))?
+    };
+    if let Some(shown) = &shown {
+        bits.intersect_with(shown);
     }
-    let bits = vv_core::select(
-        &loaded.structure.topology,
-        loaded.structure.frame(frame).positions(),
-        &rep.selection,
-    )
-    .map_err(|e| format!("{}: rep selection `{}`: {e}", loaded.label, rep.selection))?;
     Ok(Some(Arc::new(bits.ones().map(|a| a as u32).collect())))
 }
 
@@ -1492,7 +1502,10 @@ impl GpuCache {
                 .frame
                 .min(loaded.structure.frame_count().saturating_sub(1));
             let coords = loaded.structure.frames_id();
-            if entries.get(&id).is_some_and(|e| e.coords != coords) {
+            if entries
+                .get(&id)
+                .is_some_and(|e| e.coords != coords || e.altloc != loaded.altloc)
+            {
                 entries.remove(&id);
             }
             let entry = entries.entry(id).or_insert_with(|| Entry {
@@ -1501,6 +1514,7 @@ impl GpuCache {
                 adjacency: None,
                 frame: live_frame,
                 coords,
+                altloc: loaded.altloc,
                 cartoon: None,
                 cartoon_job: None,
                 reps: HashMap::new(),
@@ -2408,6 +2422,41 @@ mod tests {
         // Un-hiding jumps straight to wherever playback moved on to: one
         // step, not one per frame missed while hidden.
         assert_eq!(sync_frame(true, 2, 40), 40);
+    }
+
+    #[test]
+    fn a_rep_draws_one_conformer_unless_the_altloc_policy_says_all() {
+        use vv_core::altloc::AltlocPolicy;
+        use vv_scene::{Command, CommandHistory};
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::new(10);
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/small/1AKE.pdb");
+        history
+            .dispatch(&mut scene, Command::LoadStructure { path })
+            .unwrap();
+        let id = scene.structures().next().unwrap().0;
+        let count = |scene: &Scene, selection: &str| {
+            let loaded = scene.structure(id).unwrap();
+            let mut rep = loaded.rep().clone();
+            rep.selection = selection.to_string();
+            select_atoms(loaded, &rep, 0)
+                .unwrap()
+                .map(|a| a.len())
+                .unwrap_or(loaded.structure.atom_count())
+        };
+        let total = scene.structure(id).unwrap().structure.atom_count();
+        assert!(count(&scene, "all") < total);
+        history
+            .dispatch(
+                &mut scene,
+                Command::SetAltloc {
+                    id,
+                    policy: AltlocPolicy::All,
+                },
+            )
+            .unwrap();
+        assert_eq!(count(&scene, "all"), total);
     }
 
     /// Playback (`Scene::set_frame_live`) keeps advancing a hidden

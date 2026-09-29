@@ -2,8 +2,8 @@
 
 All readers are written from the format specifications, not from other
 tools' code (see CONTRIBUTING.md). `vv_io::load` picks the format from the
-extension (`.cif`/`.mmcif`/`.pdbx`, `.pdb`/`.ent`, optional `.gz`) or from
-the content, memory-maps the file, and decompresses gzip on the fly.
+extension (`.cif`/`.mmcif`/`.pdbx`, `.bcif`, `.pdb`/`.ent`, optional `.gz`)
+or from the content, memory-maps the file, and decompresses gzip on the fly.
 
 `vv_io::load_topology` additionally reads `.psf` and `.prmtop`/`.parm7`
 (text, optional `.gz`) as a bare `Topology` with no coordinates -- for
@@ -30,10 +30,37 @@ PRMTOP alone is not a valid structure.
 - Models: the first `pdbx_PDB_model_num` defines the topology; further
   models with the same atom count become extra coordinate frames.
 - Alternate locations are kept and tagged, never dropped.
+- Atom names longer than four characters are kept whole
+  (`Topology::atom_name`); `Topology::name` holds the first four bytes.
+- `type_symbol` `D` is deuterium: the element is hydrogen, the isotope is
+  the `flags::DEUTERIUM` bit, so every hydrogen rule still applies.
+- The PDBx dictionary has no segment id. The local item
+  `_atom_site.vizviz_segid` carries one (written only when a structure
+  has segment ids, read back as the chain record's segid).
+- `_entity.type`, `_entity_poly.type` and `_chem_comp.type` say which
+  residues are polymer (see "Polymer status" below).
 - Also read: `_entry.id`, `_struct.title`, `_struct_conf` /
   `_struct_sheet_range` (secondary structure onto residues), and
   `_struct_conn` (disulfide, covalent, metal bonds resolved to atom
   indices). Assemblies are not expanded yet.
+
+## BinaryCIF
+
+- Read only (`vv_io::bcif`), from the BinaryCIF specification:
+  MessagePack (`vv_io::msgpack`, a small reader of the msgpack.org
+  format), then each column's encodings undone last to first
+  (`ByteArray`, `FixedPoint`, `IntervalQuantization`, `RunLength`,
+  `Delta`, `IntegerPacking`, `StringArray`; masks give `.` and `?`).
+- The decoded first data block with an `_atom_site` table is re-emitted
+  as CIF text and read by the mmCIF reader, so both syntaxes agree on
+  atoms, chains, secondary structure, connectivity, entities and
+  annotations by construction. The cost is a text buffer the size of the
+  equivalent mmCIF and no parallel atom parse: a BinaryCIF file is
+  smaller on disk, not faster to load.
+- `fetch ID bcif` (`vv_io::fetch::fetch_bcif`) downloads the asymmetric
+  unit from `models.rcsb.org/ID.bcif`.
+- MMTF is not read: RCSB stopped serving it in July 2024 and recommends
+  BinaryCIF instead.
 
 ## PDB (legacy)
 
@@ -112,11 +139,11 @@ Every row is pinned by a test in `crates/vv-io/tests/formats_audit.rs`
 |---|---|---|
 | ATOM/HETATM columns (serial 7-11, name 13-16, altLoc 17, resName 18-20, chain 22, resSeq 23-26, iCode 27, xyz 31-54, occupancy, B, element 77-78, charge 79-80) | yes | fixed slices; a record ending before column 54 is a line-numbered error, not a panic |
 | 4-character residue names (column 21 borrowed) | yes | columns 18-21 read as the name; the writer emits the same |
-| Segment id (73-76) | partial | used as the chain name only when column 22 is blank |
-| Alternate locations | yes | all conformers kept, tagged in `alt_loc`; bonds, SASA and `altloc` selection are alt-aware (same policy as mmCIF) |
+| Segment id (73-76) | yes | kept on the chain record (`Topology::segid`, `segname` selection) and written back; a change of segid within one chain letter starts a new chain record; the chain name is the segid only when column 22 is blank |
+| Alternate locations | yes | all conformers kept, tagged in `alt_loc`; bonds, SASA and `altloc` selection are alt-aware (same policy as mmCIF); which one draws is the `altloc` display policy (see Policies) |
 | Insertion codes | yes | `(chain, seq, iCode, name)` is the residue key; `52` and `52A` are distinct residues |
 | Microheterogeneity (`ASER`/`BTHR` at one number) | yes | residue name is part of the key, so each variant is its own residue |
-| Element: column 77-78, else name | yes | `D` is hydrogen; blank falls back to name (`CA` at column 13 is calcium, ` CA ` carbon) |
+| Element: column 77-78, else name | yes | `D` is deuterium (hydrogen with the `DEUTERIUM` flag, written back as `D`); blank falls back to name (`CA` at column 13 is calcium, ` CA ` carbon) and never yields deuterium |
 | Charge `2+` / `1-` | yes | also accepts the sign-first `+2` some writers emit |
 | Hybrid-36 serials and residue numbers | yes | read and written (`pdb::hybrid36`, `pdb::encode_hybrid36`) |
 | TER | yes | starts a new chain record even when the letter repeats (MD systems with one letter); chain selection, chain colours and the sequence strip treat records sharing a name as one chain |
@@ -127,7 +154,8 @@ Every row is pinned by a test in `crates/vv-io/tests/formats_audit.rs`
 | HELIX, SHEET | yes | range walked in file order from first to last residue, so insertion-code residues are inside; HETATM ligands reusing a number are not |
 | CRYST1 | yes | kept as `cell` / `symmetry` annotations (and written back) |
 | HEADER, TITLE, COMPND, SOURCE, EXPDTA, REMARK 2, JRNL, KEYWDS, DBREF | yes | mapped onto mmCIF category names (see Annotations) |
-| ANISOU, SEQRES, MASTER, SITE, REMARK 350 | ignored | no field in the data model; skipped without error |
+| SEQRES | yes | polymer status only (see "Polymer status"); the sequence itself is not kept |
+| ANISOU, MASTER, SITE, REMARK 350 | ignored | no field in the data model; skipped without error |
 | Assemblies (REMARK 350 BIOMT) | no | use the `fetch` assembly files |
 
 ### mmCIF
@@ -141,24 +169,55 @@ Every row is pinned by a test in `crates/vv-io/tests/formats_audit.rs`
 | `_atom_site` as key/value pairs (single atom) | yes | converted to one row |
 | Several data blocks | yes | the first block that has an `_atom_site` table is used |
 | Gzip | yes | detected by magic bytes |
-| BinaryCIF, MMTF | no | reported as an unknown format |
+| BinaryCIF | yes | `.bcif`, read through the same reader (see BinaryCIF) |
+| MMTF | no | retired by RCSB in 2024; reported as an unknown format |
 | label_* vs auth_* | yes | one rule: chain record = `label_asym_id` (`auth_asym_id` kept), `seq_id` = `label_seq_id` else `auth_seq_id` (non-polymers have none), `auth_seq_id` always kept; the PDB reader sets both from the same column, so cross-format comparisons key on the auth values |
 | `label_alt_id`, `pdbx_PDB_ins_code`, `pdbx_formal_charge`, `type_symbol` | yes | as above; missing `type_symbol` falls back to the atom name |
 | `pdbx_PDB_model_num` | yes | first model's number is the topology; other models with the same atom count are frames |
 | `struct_conf`, `struct_sheet_range` | yes | ranges by label chain and number (insertion codes keep residues that share a number apart) |
 | `struct_conn` (`disulf`, `metalc`, `covale*`) | yes | resolved to atom indices; `hydrog`, `saltbr`, `modres` are not bonds |
 | `chem_comp_bond` orders | yes | non-single orders only, by atom name within each residue |
-| `entity`, `entity_poly`, `chem_comp.type` | annotations only | polymer vs non-polymer comes from residue names (`vv_core::select` classes), not from these tables |
-| Atom names longer than 4 characters | no | truncated to the 4-byte name column |
+| `entity`, `entity_poly`, `chem_comp.type` | yes | decide polymer vs non-polymer per residue (see "Polymer status"); `entity` is also kept as an annotation |
+| Atom names longer than 4 characters | yes | kept whole; the PDB writer truncates with a warning |
+| `type_symbol` `D` | yes | deuterium flag on a hydrogen |
+| Segment id | local item | `_atom_site.vizviz_segid` (the dictionary defines none) |
 
 ### Policies
 
 - Alternate locations are kept, never dropped or merged: every conformer
   is an atom with its `alt_loc` letter and occupancy, in both readers.
-  Choosing a conformer is a selection (`altloc A`), not a load-time filter,
-  so atom counts equal the file's row counts.
+  Choosing a conformer to reach is a selection (`altloc A`), not a
+  load-time filter, so atom counts equal the file's row counts. Which
+  conformer *draws* is the per-structure `altloc` display policy
+  (`altloc first|all|LABEL`, `vv_core::altloc`): `first` (the default) shows
+  per residue the conformer with the largest summed occupancy, ties to the
+  lowest label; untagged atoms always show; bonds and surfaces are built
+  from the drawn atoms. A label a residue lacks falls back to `first`.
+- Polymer status ("Polymer status" below) is a per-residue hint from the
+  file; without one, or where it says nothing, the name tables decide.
 - Extra models must match the first model's atom count; a model that does
   not (a truncated file) is dropped silently rather than misaligned.
+
+### Polymer status
+
+`Topology::polymer_hint` holds one hint per residue, set by the reader
+before classes are assigned (`vv_core::residue_class`):
+
+- **mmCIF and BinaryCIF.** A chain record inherits its entity's kind
+  (`_entity.type`, `_entity_poly.type`). A polypeptide or polynucleotide
+  entity makes every residue in it protein or nucleic, modified residues
+  included; a non-polymer, branched or water entity makes its residues
+  never protein or nucleic (a free amino acid ligand is a small molecule,
+  water is water). A polymer of another type (polysaccharide, `other`)
+  falls back to each residue's `_chem_comp.type`.
+- **PDB.** A residue named in its chain's `SEQRES` is polymer, protein or
+  nucleic by the majority of that chain's names. A `HETATM` residue is
+  not polymer unless it is a modified residue the `SEQRES` names (`MSE`);
+  a standard residue is written `ATOM` inside a polymer, so a `HETATM` one
+  is a free ligand. Chains without `SEQRES` (MD output) give no hint.
+- A `non-polymer` hint only demotes a protein or nucleic name reading;
+  glycan, lipid and ion names keep their class. Residues with no hint
+  keep the name-table class.
 
 ### Validation
 
@@ -172,6 +231,14 @@ antibody insertion codes, 3NIR alternate locations, 2K39 116 NMR models,
 1OKC and 2RH1 membrane proteins with lipids, 1BNA DNA, 1ZNI; `4V6X.cif`
 for the >99999-atom hybrid-36 round trip). Parsed atom and model counts
 are asserted against the raw `ATOM`/`HETATM`/`ENDMDL` counts in the files.
+
+`cargo test -p vv-io --test bcif` reads 1CRN, 1AKE and 4HHB as `.bcif` and
+checks atoms, names, coordinates to 1e-3, chains, elements, classes and
+secondary structure against the `.cif` and `.pdb`. `--test atom_identity`
+covers deuterium, long names, segids (`fixtures/small/md_segments.pdb`),
+entity and `SEQRES` polymer status and the altloc policy; with `--ignored`
+it uses `fixtures/real/` downloads of the neutron entries 3KCJ (H and D
+mixed) and 5A93 (`.pdb`, `.cif`, `.bcif`) and 3NIR.
 
 ## Writers
 
@@ -198,7 +265,12 @@ files.
   geometry values all parse. Atom serials and residue numbers wider than
   5/4 decimal digits switch to the hybrid-36 extension
   (`pdb::encode_hybrid36`, inverse of `pdb::hybrid36`) rather than
-  wrapping. Chains are written by author chain name, so a chain's
+  wrapping. Deuterium is written as element `D`. The segment id fills
+  columns 73-76 (cut to four characters). An atom name over four
+  characters is cut to four; when the cut collides with another name of
+  the same residue and alternate location, its last character becomes a
+  counter (`1`-`9`, `A`-`Z`) so names stay unique, with one warning that
+  counts them. Chains are written by author chain name, so a chain's
   ligands and waters share its letter as in the PDB archive; a name
   longer than one character takes a free `A-Za-z0-9` letter (a shared
   `?` once that 62-character pool runs out), with a warning.
@@ -207,8 +279,10 @@ files.
   chain record (a repeated chain name gets a numeric suffix; `auth_asym_id`
   stays the letter), each requested frame
   its own `pdbx_PDB_model_num` (the original frame index + 1); explicit
-  bonds as a `_struct_conn` loop. No column-width limit, so atom counts
-  and chain names never need remapping.
+  bonds as a `_struct_conn` loop. No column-width limit, so atom counts,
+  chain names and atom names are lossless. Deuterium is `type_symbol` `D`;
+  segment ids go in the local `_atom_site.vizviz_segid` column when any
+  chain has one. There is no BinaryCIF writer.
 - **XYZ** (`xyz_write`), **PQR** (`pqr_write`), **GRO** (`gro_write`):
   minimal, no readers in this crate (round-trip tests parse the text
   directly). PQR's charge is the file's formal integer charge, not a

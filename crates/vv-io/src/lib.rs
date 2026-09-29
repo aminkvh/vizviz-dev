@@ -9,6 +9,7 @@ use std::sync::Arc;
 use vv_core::fixedbitset::FixedBitSet;
 use vv_core::{Element, Structure, StructureError, Topology};
 
+pub mod bcif;
 pub mod cif;
 pub mod dcd;
 #[cfg(feature = "fetch")]
@@ -16,9 +17,13 @@ pub mod fetch;
 pub mod float;
 pub mod gro_write;
 pub mod mmcif;
+mod mmcif_entity;
 pub mod mmcif_write;
+mod msgpack;
 pub mod netcdf;
 pub mod pdb;
+mod pdb_names;
+mod pdb_seqres;
 pub mod pdb_write;
 pub mod pqr_write;
 pub mod prmtop;
@@ -34,6 +39,8 @@ pub mod xyz_write;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Mmcif,
+    /// BinaryCIF (MessagePack-encoded PDBx).
+    Bcif,
     Pdb,
 }
 
@@ -44,7 +51,7 @@ pub enum ParseError {
         path: String,
         source: std::io::Error,
     },
-    #[error("cannot tell the file format of {0}: supported are mmCIF (.cif, .mmcif, .pdbx) and PDB (.pdb, .ent), optionally gzipped; binary CIF and MMTF are not")]
+    #[error("cannot tell the file format of {0}: supported are mmCIF (.cif, .mmcif, .pdbx), BinaryCIF (.bcif) and PDB (.pdb, .ent), optionally gzipped; MMTF is not")]
     UnknownFormat(String),
     #[error("file contains no atoms")]
     NoAtoms,
@@ -52,6 +59,8 @@ pub enum ParseError {
     MissingColumn(&'static str),
     #[error("missing required section {0}")]
     MissingSection(&'static str),
+    #[error("binary CIF: {0}")]
+    BinaryCif(String),
     #[error("line {line}: {message}")]
     Malformed { line: usize, message: String },
     #[error(transparent)]
@@ -151,6 +160,7 @@ impl Format {
         let ext = name.rsplit_once('.')?.1;
         match ext {
             "cif" | "mmcif" | "pdbx" => Some(Format::Mmcif),
+            "bcif" => Some(Format::Bcif),
             "pdb" | "ent" => Some(Format::Pdb),
             _ => None,
         }
@@ -161,6 +171,8 @@ impl Format {
         let head = &bytes[..bytes.len().min(4096)];
         if head.starts_with(b"data_") || head.windows(5).any(|w| w == b"loop_") {
             Some(Format::Mmcif)
+        } else if head.windows(10).any(|w| w == b"dataBlocks") {
+            Some(Format::Bcif)
         } else if head.starts_with(b"HEADER")
             || head.starts_with(b"ATOM")
             || head.starts_with(b"HETATM")
@@ -177,6 +189,7 @@ impl Format {
 pub fn parse(bytes: &[u8], format: Format) -> Result<Structure, ParseError> {
     match format {
         Format::Mmcif => mmcif::parse(bytes),
+        Format::Bcif => bcif::parse(bytes),
         Format::Pdb => pdb::parse(bytes),
     }
 }

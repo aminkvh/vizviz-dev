@@ -116,12 +116,16 @@ pub fn colors_for(scheme: ColorScheme, topology: &Topology) -> Vec<u32> {
             .map(|a| color::by_class(topology.residue_class(topology.residue_index[a] as usize)))
             .collect(),
         ColorScheme::SegmentName => {
+            let by_segid = !topology.segids.is_empty()
+                && (0..topology.chain_count()).any(|c| !topology.segid(c).is_empty());
             let mut seen: Vec<u32> = Vec::new();
-            let chain_segment: Vec<u32> = topology
-                .chains
-                .iter()
+            let chain_segment: Vec<u32> = (0..topology.chain_count())
                 .map(|c| {
-                    let id = c.auth_asym.0;
+                    let id = if by_segid {
+                        topology.segids[c].0
+                    } else {
+                        topology.chains[c].auth_asym.0
+                    };
                     seen.iter().position(|&s| s == id).unwrap_or_else(|| {
                         seen.push(id);
                         seen.len() - 1
@@ -1982,6 +1986,23 @@ mod tests {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/small")
             .join(name)
+    }
+
+    #[test]
+    fn segname_tells_apart_segments_that_share_a_chain_letter() {
+        let s = vv_io::load(small_cif_path("md_segments.pdb")).unwrap();
+        let t = &s.topology;
+        let colors = colors_for(ColorScheme::SegmentName, t);
+        let of_segid = |segid: &str| {
+            let chain = (0..t.chain_count()).find(|&c| t.segid(c) == segid).unwrap();
+            colors[t.residues[t.chains[chain].residues.start as usize]
+                .atoms
+                .start as usize]
+        };
+        assert_ne!(of_segid("PROA"), of_segid("PROB"));
+        let plain = vv_io::load(small_cif_path("1CRN.pdb")).unwrap();
+        let by_chain = colors_for(ColorScheme::SegmentName, &plain.topology);
+        assert_eq!(by_chain[0], color::by_chain(0), "no segids: by auth chain");
     }
 
     /// 1UBQ's chain A holds 76 residues and then 58 waters: the ramp

@@ -36,14 +36,15 @@ binds tighter than `or`; use parentheses to override.
 | `backbone`, `sidechain`, `hydrogen` | by atom role |
 | `helix`, `strand`, `coil` | secondary structure from the file's records |
 | `chain A B` | chain ids (label or author; case-sensitive) |
+| `segname PROA PROB` (or `segid`) | segment ids (PDB columns 73-76; case-sensitive) |
 | `resname ALA GLY` | residue names |
 | `name CA CB` | atom names |
-| `element C N` | element symbols |
+| `element C N` | element symbols (`D` is hydrogen: deuterium matches `element H`, `element D` and `hydrogen`) |
 | `resid 1-10 25` | author residue numbers, single or inclusive ranges (`-` or `:`) |
 | `seqid 1-10` | label sequence numbers (mmCIF `label_seq_id`) |
 | `serial 100-200` | atom serial numbers from the file |
 | `index 0-9` | 0-based atom indices |
-| `altloc A` | alternate-location ids |
+| `altloc A` | atoms tagged with these alternate-location ids (untagged atoms are not included; the `altloc` command chooses which conformer draws) |
 | `bfactor < 20`, `occupancy >= 0.5` | numeric compare: `< <= > >= == !=` |
 | `within 5 of <expr>` | atoms within 5 Å of any atom of `<expr>` (inclusive; `<expr>` is included) |
 | `byres <expr>` | expand `<expr>` to whole residues |

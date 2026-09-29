@@ -6,6 +6,7 @@
 //! Chains are written by author name, one character each; multi-character
 //! names map onto a free character from `A-Za-z0-9`, with a warning.
 
+use std::collections::HashMap;
 use std::io::{self, Write};
 
 use vv_core::fixedbitset::FixedBitSet;
@@ -14,6 +15,7 @@ use vv_core::{
 };
 
 use crate::pdb::encode_hybrid36;
+use crate::pdb_names::shorten;
 use crate::write::{read_frames, residue_atoms, ss_runs, SsRun};
 
 /// PDB columns 13-16 for one atom: the element symbol occupies columns
@@ -206,6 +208,13 @@ fn residue_name3(topology: &Topology, residue: &ResidueRec) -> String {
     format!("{:<3}", &name[..name.len().min(3)])
 }
 
+/// Columns 73-76: the chain record's segment id, cut to the 4 characters
+/// the format holds.
+fn segid_field(topology: &Topology, chain: u32) -> &str {
+    let segid = topology.segid(chain as usize);
+    segid.get(..4).unwrap_or(segid)
+}
+
 fn icode_char(residue: &ResidueRec) -> char {
     match residue.ins_code {
         0 => ' ',
@@ -214,6 +223,7 @@ fn icode_char(residue: &ResidueRec) -> char {
 }
 
 fn atom_line(
+    short_names: &HashMap<u32, String>,
     topology: &Topology,
     position: vv_core::glam::Vec3,
     atom: u32,
@@ -226,7 +236,12 @@ fn atom_line(
         .flags
         .get(a)
         .is_some_and(|f| f & flags::HETERO != 0);
-    let name = atom_name_field(topology.atom_name(a), topology.element[a]);
+    let name = atom_name_field(
+        short_names
+            .get(&atom)
+            .map_or_else(|| topology.atom_name(a), String::as_str),
+        topology.element[a],
+    );
     let name = std::str::from_utf8(&name).expect("ASCII field");
     let alt = topology
         .alt_loc
@@ -236,7 +251,7 @@ fn atom_line(
         .unwrap_or(b' ') as char;
     let icode = icode_char(residue);
     format!(
-        "{rec:<6}{serial:>5} {name}{alt}{resname}{chain}{resseq:>4}{icode}   {x:>8.3}{y:>8.3}{z:>8.3}{occ:>6.2}{bf:>6.2}          {element:>2}{charge}",
+        "{rec:<6}{serial:>5} {name}{alt}{resname}{chain}{resseq:>4}{icode}   {x:>8.3}{y:>8.3}{z:>8.3}{occ:>6.2}{bf:>6.2}      {segid:<4}{element:>2}{charge}",
         rec = if hetero { "HETATM" } else { "ATOM" },
         serial = number_field(serial as i64, 5),
         resname = residue_name_field(topology, residue),
@@ -247,7 +262,12 @@ fn atom_line(
         z = position.z,
         occ = topology.occupancy.get(a).copied().unwrap_or(1.0),
         bf = topology.b_factor.get(a).copied().unwrap_or(0.0),
-        element = topology.element[a].symbol(),
+        segid = segid_field(topology, residue.chain),
+        element = if topology.is_deuterium(a) {
+            "D"
+        } else {
+            topology.element[a].symbol()
+        },
         charge = charge_field(topology.charge.get(a).copied().unwrap_or(0)),
     )
 }
@@ -396,7 +416,10 @@ pub fn write(
     out: &mut impl Write,
 ) -> io::Result<Vec<String>> {
     let topology = &structure.topology;
-    let (chain_ids, warnings) = assign_chain_ids(topology, |c| chain_included(topology, atoms, c));
+    let (chain_ids, mut warnings) =
+        assign_chain_ids(topology, |c| chain_included(topology, atoms, c));
+    let (short_names, name_warnings) = shorten(topology, atoms);
+    warnings.extend(name_warnings);
     let (plan, new_serial) = build_plan(topology, atoms, &chain_ids);
 
     for line in ss_lines(topology, &ss_runs(topology, atoms), &chain_ids) {
@@ -433,7 +456,14 @@ pub fn write(
                 PlanItem::Atom(a) => {
                     let serial = new_serial[a as usize].expect("every planned atom got a serial");
                     let chain_byte = chain_ids[topology.chain_of_atom(a as usize) as usize];
-                    let line = atom_line(topology, positions[a as usize], a, serial, chain_byte);
+                    let line = atom_line(
+                        &short_names,
+                        topology,
+                        positions[a as usize],
+                        a,
+                        serial,
+                        chain_byte,
+                    );
                     write_padded(out, &line)?;
                 }
                 PlanItem::Ter {

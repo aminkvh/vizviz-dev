@@ -69,8 +69,8 @@ pub const SPECS: &[Spec] = &[
         id: "fetch",
         title: "Fetch from the PDB",
         keywords: &["download", "pdb", "rcsb", "id", "assembly", "biological unit"],
-        usage: "fetch ID [assembly N]",
-        help: "Download an entry by PDB ID into the per-user cache and load it: the asymmetric unit, or biological assembly N.",
+        usage: "fetch ID [bcif | assembly N]",
+        help: "Download an entry by PDB ID into the per-user cache and load it: the asymmetric unit (as BinaryCIF with `bcif`), or biological assembly N.",
     },
     Spec {
         id: "close",
@@ -94,6 +94,16 @@ pub const SPECS: &[Spec] = &[
         help: "Show or hide a whole structure (default: the current one), independent of any \
                rep's own `showrep`. A hidden structure draws nothing and is skipped during \
                trajectory playback: showing it again catches up to the current frame at once.",
+    },
+    Spec {
+        id: "altloc",
+        title: "Alternate locations",
+        keywords: &["conformer", "alt", "disorder", "occupancy"],
+        usage: "altloc first|all|LABEL [ID]",
+        help: "Choose which alternate location of each residue reps draw (and build bonds and \
+               surfaces from): `first`, the default, the conformer with the largest occupancy; \
+               `all`; or one label such as `A` (a residue without it shows its `first`). Every \
+               conformer stays in the data and is still reachable with `altloc A` selections.",
     },
     Spec {
         id: "select",
@@ -808,18 +818,26 @@ pub fn run_line(
             let Some(pdb_id) = words.next() else {
                 return Err(usage("fetch"));
             };
-            let assembly = match (words.next(), words.next(), words.next()) {
-                (None, _, _) => vv_io::fetch::Assembly::AsymmetricUnit,
+            let cache = vv_io::fetch::cache_dir()
+                .ok_or_else(|| ScriptError("no cache directory (no home directory?)".into()))?;
+            let fetched = match (words.next(), words.next(), words.next()) {
+                (None, _, _) => {
+                    vv_io::fetch::fetch(pdb_id, vv_io::fetch::Assembly::AsymmetricUnit, &cache)
+                }
+                (Some(w), None, _) if w.eq_ignore_ascii_case("bcif") => {
+                    vv_io::fetch::fetch_bcif(pdb_id, &cache)
+                }
                 (Some(w), Some(n), None) if w.eq_ignore_ascii_case("assembly") => {
                     let n: u32 = n.parse().map_err(|_| usage("fetch"))?;
-                    vv_io::fetch::Assembly::Biological(n.max(1))
+                    vv_io::fetch::fetch(
+                        pdb_id,
+                        vv_io::fetch::Assembly::Biological(n.max(1)),
+                        &cache,
+                    )
                 }
                 _ => return Err(usage("fetch")),
             };
-            let cache = vv_io::fetch::cache_dir()
-                .ok_or_else(|| ScriptError("no cache directory (no home directory?)".into()))?;
-            let path = vv_io::fetch::fetch(pdb_id, assembly, &cache)
-                .map_err(|e| ScriptError(e.to_string()))?;
+            let path = fetched.map_err(|e| ScriptError(e.to_string()))?;
             history.dispatch(scene, Command::LoadStructure { path: path.clone() })?;
             let (id, loaded) = scene.structures().next_back().expect("just loaded");
             Ok(format!(
@@ -845,6 +863,14 @@ pub fn run_line(
             let id = resolve_structure(scene, id_word)?;
             history.dispatch(scene, Command::ShowStructure { id, visible })?;
             Ok(format!("#{} {state}", id.to_raw()))
+        }
+        "altloc" => {
+            let (policy, id_word) = split_verb(rest);
+            let policy: vv_core::altloc::AltlocPolicy =
+                policy.parse().map_err(|_| usage("altloc"))?;
+            let id = resolve_structure(scene, id_word)?;
+            history.dispatch(scene, Command::SetAltloc { id, policy })?;
+            Ok(format!("#{} altloc {policy}", id.to_raw()))
         }
         "structures" => {
             let mut lines: Vec<String> = scene
@@ -1862,6 +1888,37 @@ mod tests {
         run_line(&mut scene, &mut history, "undo").unwrap();
         assert!(scene.structure(id).unwrap().visible);
         assert!(run_line(&mut scene, &mut history, "showstructure").is_err());
+    }
+
+    #[test]
+    fn altloc_sets_the_display_policy_rejects_nonsense_and_undoes() {
+        use vv_core::altloc::AltlocPolicy;
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::default();
+        run_line(
+            &mut scene,
+            &mut history,
+            &format!("load {}", fixture("1AKE.pdb")),
+        )
+        .unwrap();
+        let id = current(&scene).unwrap();
+        assert_eq!(scene.structure(id).unwrap().altloc, AltlocPolicy::First);
+
+        run_line(&mut scene, &mut history, "altloc B").unwrap();
+        assert_eq!(
+            scene.structure(id).unwrap().altloc,
+            AltlocPolicy::Label(b'B')
+        );
+        run_line(&mut scene, &mut history, "altloc all").unwrap();
+        assert_eq!(scene.structure(id).unwrap().altloc, AltlocPolicy::All);
+        assert!(run_line(&mut scene, &mut history, "altloc AB").is_err());
+        assert!(run_line(&mut scene, &mut history, "altloc").is_err());
+
+        run_line(&mut scene, &mut history, "undo").unwrap();
+        assert_eq!(
+            scene.structure(id).unwrap().altloc,
+            AltlocPolicy::Label(b'B')
+        );
     }
 
     #[test]

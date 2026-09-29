@@ -8,6 +8,7 @@ use std::io::{self, Write};
 use vv_core::fixedbitset::FixedBitSet;
 use vv_core::{flags, ExplicitBondKind, SecondaryStructure, Structure, Topology};
 
+use crate::mmcif::SEGID_ITEM;
 use crate::write::{read_frames, residue_atoms, ss_runs, SsRun};
 
 const ATOM_SITE_ITEMS: [&str; 19] = [
@@ -144,6 +145,16 @@ fn write_secondary_structure(
     )
 }
 
+/// The trailing segid cell of an atom row (`""` when the column is not
+/// written, `.` for a chain record without one).
+fn segid_cell(t: &Topology, chain: u32, with_segid: bool) -> String {
+    match (with_segid, t.segid(chain as usize)) {
+        (false, _) => String::new(),
+        (true, "") => " .".to_string(),
+        (true, segid) => format!(" {}", token(segid)),
+    }
+}
+
 /// One `label_asym_id` per chain record. A PDB-derived structure can have
 /// several records with one chain name (polymer, then its waters); each
 /// gets its own id so the reader keeps the records apart. `auth_asym_id`
@@ -191,6 +202,10 @@ pub fn write(
     for item in ATOM_SITE_ITEMS {
         writeln!(out, "_atom_site.{item}")?;
     }
+    let with_segid = t.segids.iter().any(|&s| !t.names.get(s).is_empty());
+    if with_segid {
+        writeln!(out, "_atom_site.{SEGID_ITEM}")?;
+    }
     let labels = label_ids(t);
     let held = read_frames(structure, frames)?;
     for (&frame, coords) in frames.iter().zip(&held) {
@@ -200,6 +215,7 @@ pub fn write(
             let asym = &labels[res.chain as usize];
             let auth_asym = t.names.get(chain.auth_asym);
             let comp = t.names.get(res.comp);
+            let segid = segid_cell(t, res.chain, with_segid);
             for a in residue_atoms(res, atoms) {
                 let a = a as usize;
                 let name = token(t.atom_name(a));
@@ -217,9 +233,9 @@ pub fn write(
                 let p = positions[a];
                 writeln!(
                     out,
-                    "{group} {} {} {name} {} {comp} {asym} {} {} {ins} {:.3} {:.3} {:.3} {:.2} {:.2} {} {} {auth_asym} {}",
+                    "{group} {} {} {name} {} {comp} {asym} {} {} {ins} {:.3} {:.3} {:.3} {:.2} {:.2} {} {} {auth_asym} {}{segid}",
                     t.serial.get(a).copied().unwrap_or(a as u32 + 1),
-                    t.element[a].symbol(),
+                    if t.is_deuterium(a) { "D" } else { t.element[a].symbol() },
                     alt.map_or(".".to_string(), |c| (c as char).to_string()),
                     chain.entity,
                     res.seq_id,

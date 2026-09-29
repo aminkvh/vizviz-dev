@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use glam::Vec3;
 
-use crate::residue_class::{self, ClassCounts, ResidueClass, Roles};
+use crate::residue_class::{self, ClassCounts, PolymerHint, ResidueClass, Roles};
 use crate::{Annotations, BondOrder, BondTable, Element, InternId, Interner};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -24,6 +24,9 @@ pub enum SecondaryStructure {
 pub mod flags {
     /// HETATM record (ligand, water, ion) rather than polymer ATOM.
     pub const HETERO: u8 = 1 << 0;
+    /// Deuterium: the element is hydrogen (every hydrogen rule applies);
+    /// the flag only keeps the isotope so a writer can emit `D` again.
+    pub const DEUTERIUM: u8 = 1 << 1;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,6 +92,16 @@ pub struct Topology {
     /// Residues per class; all zero while `residue_class` is empty.
     pub class_counts: ClassCounts,
     pub chains: Vec<ChainRec>,
+    /// Segment id (PDB columns 73-76) of each chain record; empty when no
+    /// producer set any, `""` for a record without one.
+    pub segids: Vec<InternId>,
+    /// Atoms whose name exceeds the 4-byte `name` column (mmCIF only),
+    /// ascending by atom index; `name` then holds the first four bytes.
+    pub long_names: Vec<(u32, Box<str>)>,
+    /// What the file itself says about each residue's polymer status
+    /// (mmCIF entity tables, PDB `SEQRES`); empty when it says nothing.
+    /// Overrides the name tables in `assign_residue_classes`.
+    pub polymer_hint: Vec<PolymerHint>,
     pub names: Interner,
     pub explicit_bonds: Vec<ExplicitBond>,
     /// Non-`Single` bond orders the file itself named by atom (mmCIF
@@ -147,6 +160,8 @@ pub enum TopologyError {
     },
     #[error("bond references atom {atom} but there are {atoms}")]
     BondAtom { atom: u32, atoms: usize },
+    #[error("long name given for atom {atom} but there are {atoms}")]
+    LongNameAtom { atom: u32, atoms: usize },
 }
 
 impl Topology {
@@ -164,11 +179,28 @@ impl Topology {
 
     /// Trimmed atom name, or `""` when the structure has no name column.
     pub fn atom_name(&self, atom: usize) -> &str {
+        if let Ok(i) = self
+            .long_names
+            .binary_search_by_key(&(atom as u32), |(a, _)| *a)
+        {
+            return &self.long_names[i].1;
+        }
         self.name
             .get(atom)
             .and_then(|n| std::str::from_utf8(n).ok())
             .unwrap_or("")
             .trim()
+    }
+
+    /// The chain record's segment id, `""` when it has none.
+    pub fn segid(&self, chain: usize) -> &str {
+        self.segids.get(chain).map_or("", |&id| self.names.get(id))
+    }
+
+    pub fn is_deuterium(&self, atom: usize) -> bool {
+        self.flags
+            .get(atom)
+            .is_some_and(|f| f & flags::DEUTERIUM != 0)
     }
 
     pub fn residue_name(&self, residue: usize) -> &str {
@@ -257,12 +289,27 @@ impl Topology {
                 actual: self.residue_class.len(),
             });
         }
-        if !self.residue_roles.is_empty() && self.residue_roles.len() != self.residues.len() {
+        for (column, len) in [
+            ("residue_roles", self.residue_roles.len()),
+            ("polymer_hint", self.polymer_hint.len()),
+        ] {
+            if len != 0 && len != self.residues.len() {
+                return Err(TopologyError::ColumnLength {
+                    column,
+                    expected: self.residues.len(),
+                    actual: len,
+                });
+            }
+        }
+        if !self.segids.is_empty() && self.segids.len() != self.chains.len() {
             return Err(TopologyError::ColumnLength {
-                column: "residue_roles",
-                expected: self.residues.len(),
-                actual: self.residue_roles.len(),
+                column: "segids",
+                expected: self.chains.len(),
+                actual: self.segids.len(),
             });
+        }
+        if let Some((a, _)) = self.long_names.iter().find(|(a, _)| *a as usize >= atoms) {
+            return Err(TopologyError::LongNameAtom { atom: *a, atoms });
         }
         for (name, len) in [
             ("name", self.name.len()),

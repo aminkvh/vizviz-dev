@@ -15,6 +15,15 @@ const AMINO_ACIDS: &[&str] = &[
     "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL", "SEC", "PYL", "ASX", "GLX", "UNK",
 ];
 
+/// Residues the wwPDB writes as `ATOM` inside a polymer: the standard
+/// amino acids and nucleotides. Anything else in a polymer is a modified
+/// residue and is written as `HETATM`.
+pub(super) const STANDARD_POLYMER: &[&str] = &[
+    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", "LEU", "LYS", "MET",
+    "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL", "SEC", "PYL", "UNK", "A", "C", "G", "U", "T",
+    "I", "N", "DA", "DC", "DG", "DT", "DU", "DI", "DN",
+];
+
 /// Protonation-state and disulfide variants: CHARMM (MacKerell et al.
 /// 1998, J Phys Chem B 102:3586), Amber (`leaprc.protein.*`), and the
 /// GROMACS force-field residue databases (`aminoacids.rtp`).

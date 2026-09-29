@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use vv_core::altloc::AltlocPolicy;
 use vv_core::{BondTable, Structure};
 
 use crate::selection::{Mask, SelectionSet};
@@ -91,9 +92,8 @@ pub enum ColorScheme {
     /// Wimley-White (1996) whole-residue octanol hydropathy; same ramp as
     /// `Hydrophobicity`.
     WimleyWhite,
-    /// One hue per `auth_asym_id` (see
-    /// `vv_render::color::ColorScheme::SegmentName`'s doc for why this
-    /// uses `auth_asym_id` rather than a separately-parsed segID).
+    /// One hue per segment id (`Topology::segid`), or per `auth_asym_id`
+    /// in a structure with no segment ids.
     SegmentName,
     /// One hue per connected component of the bond graph (a
     /// "fragment"); needs a `BondTable`, so unlike every other scheme here
@@ -384,6 +384,9 @@ pub struct LoadedStructure {
     /// `frame` below still advances, so showing it again catches up in one
     /// sync rather than replaying every missed frame.
     pub visible: bool,
+    /// Which alternate location of each residue reps draw
+    /// (`vv_core::altloc`); every conformer stays in the data.
+    pub altloc: AltlocPolicy,
     /// How the structure is drawn, bottom to top; never empty.
     pub reps: Vec<Rep>,
     /// The rep that `representation`, `color` and `material` edit.
@@ -430,6 +433,7 @@ impl LoadedStructure {
             trajectory: None,
             label,
             visible: true,
+            altloc: AltlocPolicy::default(),
             // Lines: cheapest to draw and shows every bond at any size.
             reps: vec![Rep::new(RepId(0), Representation::Lines)],
             current_rep: 0,

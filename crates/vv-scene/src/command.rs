@@ -123,6 +123,12 @@ pub enum Command {
         id: StructureId,
         visible: bool,
     },
+    /// Which alternate location of each residue reps draw
+    /// (`LoadedStructure::altloc`).
+    SetAltloc {
+        id: StructureId,
+        policy: vv_core::altloc::AltlocPolicy,
+    },
     SetRepresentation {
         id: StructureId,
         rep: RepId,
@@ -446,6 +452,15 @@ impl Command {
                     .ok_or(SceneError::NoSuchStructure(id))?;
                 let old = std::mem::replace(&mut loaded.visible, visible);
                 Command::ShowStructure { id, visible: old }
+            }
+
+            Command::SetAltloc { id, policy } => {
+                let loaded = scene
+                    .structures_mut()
+                    .get_mut(id)
+                    .ok_or(SceneError::NoSuchStructure(id))?;
+                let old = std::mem::replace(&mut loaded.altloc, policy);
+                Command::SetAltloc { id, policy: old }
             }
 
             Command::SetRepresentation {

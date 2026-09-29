@@ -40,8 +40,8 @@ pub enum ColorScheme {
     /// Wimley-White whole-residue octanol hydropathy; same ramp as
     /// `Hydrophobicity`.
     WimleyWhite,
-    /// One hue per `auth_asym_id` (see
-    /// `vv_scene::ColorScheme::SegmentName`).
+    /// One hue per segment id (`Topology::segid`), or per `auth_asym_id`
+    /// in a structure with no segment ids.
     SegmentName,
     /// Zappo physicochemical grouping (Livingstone & Barton 1993).
     Zappo,

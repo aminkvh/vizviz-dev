@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use fixedbitset::FixedBitSet;
 use serde::{Deserialize, Serialize};
+use vv_core::altloc::AltlocPolicy;
 
 use crate::command::Command;
 use crate::history::CommandHistory;
@@ -83,6 +84,9 @@ pub struct SavedStructure {
     /// before this field existed, so `#[serde(default = "shown")]`.
     #[serde(default = "shown")]
     pub visible: bool,
+    /// `LoadedStructure::altloc` as its command word; absent when `first`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub altloc: String,
     /// How the structure is drawn; empty in a schema-1 file, which has
     /// the single `representation`/`coloring`/`material` below instead.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -126,6 +130,25 @@ pub struct SavedRep {
 
 fn shown() -> bool {
     true
+}
+
+/// The policy a saved word names, or `None` for the default (absent) or an
+/// unreadable one, which warns.
+fn restored_altloc(word: &str, label: &str, warnings: &mut Vec<String>) -> Option<AltlocPolicy> {
+    if word.is_empty() {
+        return None;
+    }
+    word.parse()
+        .map_err(|e| warnings.push(format!("{label}: {e}")))
+        .ok()
+}
+
+fn saved_altloc(policy: AltlocPolicy) -> String {
+    if policy == AltlocPolicy::default() {
+        String::new()
+    } else {
+        policy.to_string()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -306,6 +329,7 @@ pub fn capture(
                 .map(|t| std::path::absolute(t).unwrap_or_else(|_| t.clone())),
             label: loaded.label.clone(),
             visible: loaded.visible,
+            altloc: saved_altloc(loaded.altloc),
             reps: loaded
                 .reps
                 .iter()
@@ -473,6 +497,11 @@ pub fn apply(file: &SessionFile, scene: &mut Scene, history: &mut CommandHistory
                 if let Err(e) =
                     history.dispatch(scene, Command::ShowStructure { id, visible: false })
                 {
+                    out.warnings.push(format!("{}: {e}", s.label));
+                }
+            }
+            if let Some(policy) = restored_altloc(&s.altloc, &s.label, &mut out.warnings) {
+                if let Err(e) = history.dispatch(scene, Command::SetAltloc { id, policy }) {
                     out.warnings.push(format!("{}: {e}", s.label));
                 }
             }
@@ -980,6 +1009,33 @@ END
     }
 
     #[test]
+    fn the_altloc_policy_survives_a_session_and_the_default_is_not_written() {
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::default();
+        let path = fixture("1AKE.pdb");
+        history
+            .dispatch(&mut scene, Command::LoadStructure { path })
+            .unwrap();
+        let id = scene.structures().next().unwrap().0;
+        let dir = std::env::temp_dir().join(format!("vv_altloc_session_{}", std::process::id()));
+        let default_file = capture(&scene, None, &dir).unwrap();
+        assert!(default_file.structures[0].altloc.is_empty());
+
+        let policy = AltlocPolicy::Label(b'B');
+        history
+            .dispatch(&mut scene, Command::SetAltloc { id, policy })
+            .unwrap();
+        let file = capture(&scene, None, &dir).unwrap();
+        assert_eq!(file.structures[0].altloc, "B");
+
+        let mut scene2 = Scene::new();
+        let applied = apply(&file, &mut scene2, &mut CommandHistory::default());
+        assert!(applied.warnings.is_empty(), "{:?}", applied.warnings);
+        let id2 = applied.ids[0].unwrap();
+        assert_eq!(scene2.structure(id2).unwrap().altloc, policy);
+    }
+
+    #[test]
     fn a_trajectory_its_frame_and_measurements_survive_a_session_round_trip() {
         let mut scene = Scene::new();
         let mut history = CommandHistory::default();
@@ -1119,6 +1175,7 @@ END
                     path: PathBuf::from("/no/such/file.cif"),
                     trajectory: None,
                     label: "gone".into(),
+                    altloc: String::new(),
                     visible: true,
                     reps: Vec::new(),
                     current_rep: 0,
@@ -1134,6 +1191,7 @@ END
                     path: fixture("1CRN.cif"),
                     trajectory: None,
                     label: "1CRN".into(),
+                    altloc: String::new(),
                     visible: true,
                     reps: Vec::new(),
                     current_rep: 0,

@@ -117,6 +117,8 @@ pub enum Expr {
     Class(Class),
     /// Matched exactly against the label *or* auth chain id.
     Chain(Vec<String>),
+    /// Segment id, matched exactly.
+    Segname(Vec<String>),
     /// Case-insensitive.
     Resname(Vec<String>),
     /// Trimmed, case-insensitive.
@@ -224,6 +226,7 @@ enum Kw {
     Of,
     Class(Class),
     Chain,
+    Segname,
     Resname,
     Name,
     Element,
@@ -262,6 +265,7 @@ fn keyword(word: &str) -> Option<Kw> {
         "strand" => Kw::Class(Class::Strand),
         "coil" => Kw::Class(Class::Coil),
         "chain" => Kw::Chain,
+        "segname" | "segid" => Kw::Segname,
         "resname" => Kw::Resname,
         "name" => Kw::Name,
         "element" => Kw::Element,
@@ -399,6 +403,7 @@ impl<'a> Parser<'a> {
             )),
             Some(Kw::Class(c)) => Ok(Expr::Class(c)),
             Some(Kw::Chain) => Ok(Expr::Chain(self.strings(&tok)?)),
+            Some(Kw::Segname) => Ok(Expr::Segname(self.strings(&tok)?)),
             Some(Kw::Resname) => Ok(Expr::Resname(self.strings(&tok)?)),
             Some(Kw::Name) => Ok(Expr::Name(self.strings(&tok)?)),
             Some(Kw::Element) => self.elements(&tok),
@@ -585,6 +590,7 @@ impl Expr {
         match self {
             Expr::Class(class) => class_mask(t, *class),
             Expr::Chain(ids) => chain_mask(t, ids),
+            Expr::Segname(ids) => segname_mask(t, ids),
             Expr::Resname(names) => {
                 comp_mask(t, |comp| names.iter().any(|w| w.eq_ignore_ascii_case(comp)))
             }
@@ -676,6 +682,13 @@ fn chain_mask(t: &Topology, ids: &[String]) -> FixedBitSet {
         .chains
         .iter()
         .map(|c| wanted.contains(&c.label_asym) || wanted.contains(&c.auth_asym))
+        .collect();
+    residue_mask(t, |_, r| hit[r.chain as usize])
+}
+
+fn segname_mask(t: &Topology, ids: &[String]) -> FixedBitSet {
+    let hit: Vec<bool> = (0..t.chain_count())
+        .map(|c| ids.iter().any(|id| id == t.segid(c)))
         .collect();
     residue_mask(t, |_, r| hit[r.chain as usize])
 }
@@ -1091,6 +1104,13 @@ mod tests {
         assert_eq!(ones("chain L"), vec![14, 15]);
         assert_eq!(ones("chain W L"), vec![14, 15, 16, 17]);
         assert_eq!(ones("chain a"), vec![], "chain ids are case-sensitive");
+    }
+
+    #[test]
+    fn segname_needs_a_value_and_matches_nothing_without_segids() {
+        assert_eq!(ones("segname PROA"), vec![]);
+        assert_eq!(ones("segid PROA"), vec![]);
+        assert!(parse("segname").is_err());
     }
 
     #[test]

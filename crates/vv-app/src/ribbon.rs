@@ -1738,6 +1738,7 @@ mod tests {
             "showstructure",
             "the Structures panel row's own eye is its clickable form",
         ),
+        ("altloc", "command line only (no panel yet)"),
         ("selrep", "a Selections row's ⋯ ▸ Edit expression"),
         ("currep", "clicking a row in the Selections panel"),
         ("showrep", "a selection row's own eye is its clickable form"),

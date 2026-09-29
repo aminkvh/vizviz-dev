@@ -33,6 +33,16 @@ pub struct AtomRow<'a> {
     pub hetero: bool,
 }
 
+/// Per-atom fields most rows leave at their default: a name longer than
+/// the 4-byte column, the chain's segment id, the deuterium isotope.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AtomExtra<'a> {
+    pub long_name: Option<&'a str>,
+    /// Read when the row opens a new chain record.
+    pub segid: &'a str,
+    pub deuterium: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ResidueKey {
     asym: InternId,
@@ -81,6 +91,10 @@ impl TopologyBuilder {
     }
 
     pub fn push(&mut self, row: &AtomRow<'_>) {
+        self.push_with(row, &AtomExtra::default());
+    }
+
+    pub fn push_with(&mut self, row: &AtomRow<'_>, extra: &AtomExtra<'_>) {
         let t = &mut self.topology;
         let asym = t.names.intern(row.asym);
         let comp = t.names.intern(row.comp);
@@ -97,6 +111,8 @@ impl TopologyBuilder {
             if chain_changed {
                 let auth_asym = t.names.intern(row.auth_asym);
                 let start = t.residues.len() as u32;
+                let segid = t.names.intern(extra.segid);
+                t.segids.push(segid);
                 t.chains.push(ChainRec {
                     residues: start..start,
                     label_asym: asym,
@@ -127,7 +143,14 @@ impl TopologyBuilder {
         t.occupancy.push(row.occupancy);
         t.alt_loc.push(row.alt_loc);
         t.charge.push(row.charge);
-        t.flags.push(if row.hetero { flags::HETERO } else { 0 });
+        let mut atom_flags = if row.hetero { flags::HETERO } else { 0 };
+        if extra.deuterium {
+            atom_flags |= flags::DEUTERIUM;
+        }
+        t.flags.push(atom_flags);
+        if let Some(long) = extra.long_name {
+            t.long_names.push((atom, long.into()));
+        }
         t.residue_index.push(residue);
         self.positions.push(row.position);
     }
@@ -190,6 +213,7 @@ impl TopologyBuilder {
                 t.chains.last_mut().unwrap().residues.end = residues.end;
                 continue;
             }
+            t.segids.push(remap[o.segids[i].0 as usize]);
             t.chains.push(ChainRec {
                 residues,
                 label_asym: remap[c.label_asym.0 as usize],
@@ -206,6 +230,11 @@ impl TopologyBuilder {
         t.alt_loc.append(&mut o.alt_loc);
         t.charge.append(&mut o.charge);
         t.flags.append(&mut o.flags);
+        t.long_names.extend(
+            o.long_names
+                .drain(..)
+                .map(|(atom, name)| (atom + atom_base, name)),
+        );
         t.residue_index
             .extend(o.residue_index.iter().map(|r| r + residue_base));
         self.positions.append(&mut other.positions);
@@ -358,6 +387,30 @@ mod tests {
         assert_eq!(t.validate(), Ok(()));
         assert_eq!(t.chain_count(), 2);
         assert_eq!(t.chain_name(1), "B");
+    }
+
+    #[test]
+    fn extras_are_kept_and_shifted_when_builders_are_appended() {
+        let mut a = TopologyBuilder::new();
+        let extra = AtomExtra {
+            segid: "SEG1",
+            ..Default::default()
+        };
+        a.push_with(&row("A", 1, "ALA", "N", 1), &extra);
+        let mut b = TopologyBuilder::new();
+        let extra = AtomExtra {
+            long_name: Some("N12345"),
+            segid: "SEG2",
+            deuterium: true,
+        };
+        b.push_with(&row("B", 1, "ALA", "N123", 2), &extra);
+        a.append(b);
+        let t = a.finish().unwrap().topology;
+        assert_eq!(t.validate(), Ok(()));
+        assert_eq!((t.segid(0), t.segid(1)), ("SEG1", "SEG2"));
+        assert_eq!(t.long_names, vec![(1, "N12345".into())]);
+        assert_eq!((t.atom_name(0), t.atom_name(1)), ("N", "N12345"));
+        assert!(!t.is_deuterium(0) && t.is_deuterium(1));
     }
 
     #[test]

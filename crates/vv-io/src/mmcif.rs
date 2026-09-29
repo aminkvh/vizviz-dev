@@ -9,14 +9,19 @@ use std::collections::HashMap;
 use rayon::prelude::*;
 use vv_core::glam::Vec3;
 use vv_core::{
-    AnnotationCategory, Annotations, AtomRow, BondOrder, Element, ExplicitBond, ExplicitBondKind,
-    SecondaryStructure, Structure, Topology, TopologyBuilder,
+    AnnotationCategory, Annotations, AtomExtra, AtomRow, BondOrder, Element, ExplicitBond,
+    ExplicitBondKind, SecondaryStructure, Structure, Topology, TopologyBuilder,
 };
 
 use crate::cif::{self, is_null, Category, LoopLocation};
 use crate::float::{parse_f32, parse_i32};
+use crate::mmcif_entity::EntityInfo;
 use crate::ss_range::{self, SsRange};
 use crate::ParseError;
+
+/// The PDBx dictionary has no segment id. This local item carries a
+/// PDB/MD segid so it survives a round trip through mmCIF.
+pub(crate) const SEGID_ITEM: &str = "vizviz_segid";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Role {
@@ -40,6 +45,7 @@ enum Role {
     AuthAsym,
     AuthAtomName,
     Model,
+    Segid,
 }
 
 impl Role {
@@ -65,6 +71,7 @@ impl Role {
             "auth_asym_id" => Role::AuthAsym,
             "auth_atom_id" => Role::AuthAtomName,
             "pdbx_PDB_model_num" => Role::Model,
+            SEGID_ITEM => Role::Segid,
             _ => return None,
         })
     }
@@ -72,13 +79,13 @@ impl Role {
 
 /// Column index of each role, or `usize::MAX` when absent.
 struct Columns {
-    index: [usize; 20],
+    index: [usize; 21],
     count: usize,
 }
 
 impl Columns {
     fn new(items: &[&str]) -> Result<Self, ParseError> {
-        let mut index = [usize::MAX; 20];
+        let mut index = [usize::MAX; 21];
         for (i, item) in items.iter().enumerate() {
             if let Some(role) = Role::from_item(item) {
                 index[role as usize] = i;
@@ -236,11 +243,16 @@ fn parse_chunk(chunk: &[u8], cols: &Columns, first_model: i32, line_offset: usiz
             .get(&fields, Role::Name)
             .or_else(|| cols.get(&fields, Role::AuthAtomName))
             .unwrap_or(b"");
-        let element = cols
-            .get(&fields, Role::Element)
+        let symbol = cols.get(&fields, Role::Element);
+        let element = symbol
             .map(Element::from_symbol)
             .filter(|e| !e.is_unknown())
             .unwrap_or_else(|| Element::from_atom_name(name_bytes));
+        let extra = AtomExtra {
+            long_name: std::str::from_utf8(name_bytes).ok().filter(|n| n.len() > 4),
+            segid: as_str(cols.get(&fields, Role::Segid)),
+            deuterium: matches!(symbol, Some(b"D" | b"d")),
+        };
         let asym = as_str(cols.get(&fields, Role::Asym));
         let auth_asym = cols
             .get(&fields, Role::AuthAsym)
@@ -280,7 +292,7 @@ fn parse_chunk(chunk: &[u8], cols: &Columns, first_model: i32, line_offset: usiz
                 .get(&fields, Role::Group)
                 .is_some_and(|g| g == b"HETATM"),
         };
-        builder.push(&row);
+        builder.push_with(&row, &extra);
     }
     ChunkResult {
         builder,
@@ -338,22 +350,31 @@ fn reflow_rows(body: &[u8], ncols: usize) -> Option<Vec<u8>> {
     (ncols > 0 && values.len() % ncols == 0).then(|| one_row_per_line(values.into_iter(), ncols))
 }
 
-fn parse_atom_site(src: &[u8], loc: &LoopLocation<'_>) -> Result<Structure, ParseError> {
+fn parse_atom_site(
+    src: &[u8],
+    loc: &LoopLocation<'_>,
+    entity: &EntityInfo,
+) -> Result<Structure, ParseError> {
     let body = &src[loc.body.clone()];
     let line_base = memchr::memchr_iter(b'\n', &src[..loc.body.start]).count();
-    match parse_rows(&loc.items, body, line_base) {
+    match parse_rows(&loc.items, body, line_base, entity) {
         Err(ParseError::Malformed { message, .. }) if message.starts_with(ROW_FIELD_MISMATCH) => {
             let flat = reflow_rows(body, loc.items.len());
             flat.map_or_else(
-                || parse_rows(&loc.items, body, line_base),
-                |flat| parse_rows(&loc.items, &flat, 0),
+                || parse_rows(&loc.items, body, line_base, entity),
+                |flat| parse_rows(&loc.items, &flat, 0, entity),
             )
         }
         other => other,
     }
 }
 
-fn parse_rows(items: &[&str], body: &[u8], line_base: usize) -> Result<Structure, ParseError> {
+fn parse_rows(
+    items: &[&str],
+    body: &[u8],
+    line_base: usize,
+    entity: &EntityInfo,
+) -> Result<Structure, ParseError> {
     let cols = Columns::new(items)?;
 
     let first_model = {
@@ -416,6 +437,7 @@ fn parse_rows(items: &[&str], body: &[u8], line_base: usize) -> Result<Structure
         .filter(|(_, v)| v.len() == atom_count)
         .map(|(_, v)| v)
         .collect();
+    builder.topology.polymer_hint = entity.hints(&builder.topology);
     builder.finish_with_frames(extra).map_err(ParseError::from)
 }
 
@@ -476,9 +498,8 @@ fn find_atom(
     let asym_id = topology.names.lookup(asym)?;
     let residue = *lookup.get(&(asym_id, seq_id, ins))?;
     let range = topology.residues[residue as usize].atoms.clone();
-    let wanted = atom_name(name.as_bytes());
     range.into_iter().find(|&a| {
-        topology.name[a as usize] == wanted
+        topology.atom_name(a as usize) == name
             && alt.is_none_or(|alt| {
                 topology.alt_loc[a as usize] == 0 || topology.alt_loc[a as usize] == alt
             })
@@ -695,13 +716,17 @@ fn read_first_atom_block(
 ) -> Result<(Structure, HashMap<String, Category<'_>>), ParseError> {
     for block in 0.. {
         let read = cif::read_block(src, &["atom_site"], block);
+        let entity = EntityInfo::collect(&read.categories);
         if let Some(loc) = read.skipped.get("atom_site") {
-            return Ok((parse_atom_site(src, loc)?, read.categories));
+            return Ok((parse_atom_site(src, loc, &entity)?, read.categories));
         }
         if let Some(single) = read.categories.get("atom_site") {
             let ncols = single.items.len();
             let body = one_row_per_line(single.rows[0].iter().copied(), ncols);
-            return Ok((parse_rows(&single.items, &body, 0)?, read.categories));
+            return Ok((
+                parse_rows(&single.items, &body, 0, &entity)?,
+                read.categories,
+            ));
         }
         if read.blocks_seen <= block {
             break;

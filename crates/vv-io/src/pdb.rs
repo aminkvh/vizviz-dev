@@ -6,11 +6,12 @@ use std::collections::HashMap;
 
 use vv_core::glam::Vec3;
 use vv_core::{
-    AnnotationCategory, Annotations, AtomRow, Element, ExplicitBond, ExplicitBondKind,
+    AnnotationCategory, Annotations, AtomExtra, AtomRow, Element, ExplicitBond, ExplicitBondKind,
     SecondaryStructure, Structure, Topology, TopologyBuilder,
 };
 
 use crate::float::parse_f32;
+use crate::pdb_seqres::Seqres;
 use crate::ss_range::{self, SsRange};
 use crate::ParseError;
 
@@ -446,6 +447,8 @@ pub fn parse(src: &[u8]) -> Result<Structure, ParseError> {
     // Blocks after the first `END` (frames separated by END alone).
     let mut after_end = false;
     let mut block: Vec<(Vec3, [u8; 4])> = Vec::new();
+    let mut seqres = Seqres::default();
+    let mut last_segid: &[u8] = b"";
 
     for (line_no, raw) in src.split(|&b| b == b'\n').enumerate() {
         let line = match raw.last() {
@@ -495,6 +498,16 @@ pub fn parse(src: &[u8]) -> Result<Structure, ParseError> {
                 // Columns 18-21: MD packages use column 21 for a fourth
                 // residue-name character; the format leaves it blank.
                 let comp = text(line, 17, 21);
+                let segid = field(line, 72, 76);
+                if segid != last_segid {
+                    builder.end_chain();
+                    last_segid = segid;
+                }
+                let extra = AtomExtra {
+                    segid: std::str::from_utf8(segid).unwrap_or(""),
+                    deuterium: matches!(field(line, 76, 78), b"D" | b"d"),
+                    ..Default::default()
+                };
                 let row = AtomRow {
                     element: element_of(line, &name),
                     name,
@@ -521,8 +534,9 @@ pub fn parse(src: &[u8]) -> Result<Structure, ParseError> {
                         .entry(key)
                         .or_insert(builder.atom_count() as u32);
                 }
-                builder.push(&row);
+                builder.push_with(&row, &extra);
             }
+            b"SEQRES" => seqres.record(line),
             b"MODEL " => {
                 if seen_model {
                     in_first_model = false;
@@ -592,6 +606,7 @@ pub fn parse(src: &[u8]) -> Result<Structure, ParseError> {
     }
     let atom_count = builder.atom_count();
     let topology = &mut builder.topology;
+    topology.polymer_hint = seqres.hints(topology);
     topology.annotations = header.into_annotations(&title);
     topology.title = title;
     topology.id = id;
