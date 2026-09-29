@@ -269,6 +269,11 @@ struct PdbHeader {
     cell: Vec<String>,
     space_group: String,
     z_pdb: String,
+    /// Inside the `REMARK 465` residue table (after its column header).
+    in_missing_table: bool,
+    /// `(residue name, chain, sequence number, insertion code)` of every
+    /// `REMARK 465` residue, model 1 only.
+    missing: Vec<(String, String, String, String)>,
 }
 
 fn text(line: &[u8], start: usize, end: usize) -> &str {
@@ -319,6 +324,7 @@ impl PdbHeader {
                     }
                 }
             }
+            b"REMARK" if field(line, 7, 10) == b"465" => self.missing_residue(line),
             b"JRNL  " => match field(line, 12, 16) {
                 b"TITL" => join(&mut self.journal_title, text(line, 19, 80)),
                 b"DOI" => join(&mut self.doi, text(line, 19, 80)),
@@ -332,6 +338,27 @@ impl PdbHeader {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// One `REMARK 465` line: the table header switches row parsing on;
+    /// a row is residue name (cols 16-18), chain (20), number (22-26) and
+    /// insertion code (27). Rows of models after the first are skipped.
+    fn missing_residue(&mut self, line: &[u8]) {
+        let words: Vec<&str> = text(line, 11, 80).split_whitespace().collect();
+        if words == ["M", "RES", "C", "SSSEQI"] {
+            self.in_missing_table = true;
+            return;
+        }
+        let model = text(line, 10, 14);
+        if !self.in_missing_table || !(model.is_empty() || model == "1") {
+            return;
+        }
+        let (name, chain) = (text(line, 15, 18), text(line, 19, 20));
+        let (seq, ins) = (text(line, 21, 26), text(line, 26, 27));
+        if !name.is_empty() && !seq.is_empty() {
+            self.missing
+                .push((name.into(), chain.into(), seq.into(), ins.into()));
         }
     }
 
@@ -410,6 +437,10 @@ impl PdbHeader {
                 rows: organisms.into_iter().map(|(id, v)| vec![id, v]).collect(),
             });
         }
+        if !self.missing.is_empty() {
+            out.categories
+                .push(missing_residues_category(&self.missing));
+        }
         let unp: Vec<Vec<String>> = self
             .dbref
             .into_iter()
@@ -424,6 +455,29 @@ impl PdbHeader {
             });
         }
         out
+    }
+}
+
+/// `REMARK 465` rows as the mmCIF `pdbx_unobs_or_zero_occ_residues`
+/// category (all unobserved: `occupancy_flag` 0).
+fn missing_residues_category(rows: &[(String, String, String, String)]) -> AnnotationCategory {
+    let items = [
+        "polymer_flag",
+        "occupancy_flag",
+        "auth_asym_id",
+        "auth_comp_id",
+        "auth_seq_id",
+        "PDB_ins_code",
+    ];
+    AnnotationCategory {
+        name: "pdbx_unobs_or_zero_occ_residues".to_string(),
+        items: items.map(String::from).to_vec(),
+        rows: rows
+            .iter()
+            .map(|(name, chain, seq, ins)| {
+                ["Y", "0", chain, name, seq, ins].map(String::from).to_vec()
+            })
+            .collect(),
     }
 }
 

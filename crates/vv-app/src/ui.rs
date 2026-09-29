@@ -969,6 +969,8 @@ pub struct AppUi<'a> {
     /// Studio ▸ Frame preview / `framing` (see `studio_frame`'s own doc
     /// on `State`).
     pub studio_frame: &'a mut bool,
+    /// The Sequence panel's coloring, enabled tracks and cached results.
+    pub sequence: &'a mut crate::sequence::SequenceState,
     /// `window WxH`: the window size to take, in logical pixels.
     pub window_request: &'a mut Option<(u32, u32)>,
     /// Where to write a capture of the whole window (`uishot`), and how

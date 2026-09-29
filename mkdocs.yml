@@ -41,6 +41,7 @@ nav:
   - Using vizviz:
       - Commands: COMMANDS.md
       - Selections: SELECTION.md
+      - Sequence: SEQUENCE.md
       - File formats: FORMATS.md
       - Analysis: ANALYSIS.md
       - Rendering: RENDERING.md

@@ -198,6 +198,21 @@ pub const VIEW_ENTRIES: &[Entry] = &[
                off`.",
     },
     Entry {
+        id: "sequence",
+        title: "Sequence coloring and tracks",
+        keywords: &[
+            "annotation", "annotations", "kabat", "numbering", "glycosylation", "disulfide",
+            "liability", "liabilities", "sasa", "hydrophobicity", "track", "legend", "strip",
+        ],
+        usage: "sequence color SCHEME | track NAME [on|off] | tracks [all|none] | legend [on|off]",
+        help: "The Sequence panel's header as commands. `color` picks how residue letters \
+               are colored: none, view (as the 3D view), ss, chemistry, hydrophobicity, \
+               bfactor, sasa, charge, clustal, zappo, taylor. `track` shows or hides an \
+               annotation row under each chain: ss, numbering, missing, disulfide, glycan, \
+               liability, ligand, interface, altloc, modified. `tracks all|none` sets every \
+               track; `legend` shows the key of the enabled ones.",
+    },
+    Entry {
         id: "confirmquit",
         title: "Confirm quit",
         keywords: &["quit", "confirm", "remind", "unsaved", "dialog"],
@@ -459,7 +474,7 @@ fn parse_strength(word: &str, current: f32, on: f32, max: f32) -> Result<f32, St
     }
 }
 
-fn parse_on_off(word: &str, current: bool) -> Result<bool, String> {
+pub(crate) fn parse_on_off(word: &str, current: bool) -> Result<bool, String> {
     match word {
         "" | "toggle" => Ok(!current),
         "on" | "true" | "1" | "yes" => Ok(true),
@@ -1442,6 +1457,7 @@ impl AppUi<'_> {
                 }
                 Ok(format!("deleted workspace {rest}"))
             }
+            "sequence" => self.sequence_command(rest),
             "preferences" => {
                 self.prefs_dialog.open = true;
                 Ok(String::new())
@@ -1715,6 +1731,7 @@ const TOAST_SKIP: &[&str] = &[
     "info",
     "mode",
     "selectmode",
+    "sequence",
     "ribbon",
     "panel",
     "undo",

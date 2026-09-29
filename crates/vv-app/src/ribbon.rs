@@ -1667,6 +1667,10 @@ mod tests {
             "movie",
             "the Movie panel (File ▸ Export ▸ Movie…) is its clickable form",
         ),
+        (
+            "sequence",
+            "the Sequence panel's own header (Color, Tracks)",
+        ),
         ("uishot", "a documentation and review tool"),
         ("window", "sets the window size for scripted layout checks"),
         ("repopt", "a Selections row's ⋯ ▸ Options…"),

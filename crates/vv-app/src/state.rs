@@ -169,6 +169,7 @@ pub(crate) struct State {
     /// ratio on the viewport. Not undoable or saved -- a preview aid, not
     /// a look.
     studio_frame: bool,
+    sequence: crate::sequence::SequenceState,
     window_request: Option<(u32, u32)>,
     /// `uishot`: capture the whole window once this many more frames
     /// are drawn.
@@ -375,6 +376,7 @@ impl State {
             quit_dont_ask: false,
             start_card_dismissed,
             studio_frame: false,
+            sequence: Default::default(),
             window_request: None,
             ui_shot: None,
             log,
@@ -1189,6 +1191,7 @@ impl State {
                 quit_dont_ask: &mut self.quit_dont_ask,
                 start_card_dismissed: &mut self.start_card_dismissed,
                 studio_frame: &mut self.studio_frame,
+                sequence: &mut self.sequence,
                 window_request: &mut self.window_request,
                 ui_shot: &mut self.ui_shot,
                 prefs: &mut self.prefs,

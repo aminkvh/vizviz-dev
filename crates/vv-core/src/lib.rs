@@ -23,6 +23,7 @@ pub mod material;
 pub mod residue_class;
 pub mod sasa;
 pub mod select;
+pub mod seqfeat;
 pub mod ses;
 pub mod skin_surface;
 pub mod spatial;
