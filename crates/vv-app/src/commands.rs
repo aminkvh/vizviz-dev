@@ -204,13 +204,15 @@ pub const VIEW_ENTRIES: &[Entry] = &[
             "annotation", "annotations", "kabat", "numbering", "glycosylation", "disulfide",
             "liability", "liabilities", "sasa", "hydrophobicity", "track", "legend", "strip",
         ],
-        usage: "sequence color SCHEME | track NAME [on|off] | tracks [all|none] | legend [on|off]",
+        usage: "sequence color SCHEME | track NAME [on|off] | tracks [all|none] | legend [on|off] | antibody scheme|cdr NAME",
         help: "The Sequence panel's header as commands. `color` picks how residue letters \
                are colored: none, view (as the 3D view), ss, chemistry, hydrophobicity, \
                bfactor, sasa, charge, clustal, zappo, taylor. `track` shows or hides an \
                annotation row under each chain: ss, numbering, missing, disulfide, glycan, \
-               liability, ligand, interface, altloc, modified. `tracks all|none` sets every \
-               track; `legend` shows the key of the enabled ones.",
+               liability, ligand, interface, altloc, modified, antibody. `tracks all|none` sets \
+               every track; `legend` shows the key of the enabled ones. `antibody scheme` \
+               picks the numbering (kabat, chothia, imgt, martin) and `antibody cdr` the CDR \
+               definition (kabat, chothia, imgt, contact, north), independently.",
     },
     Entry {
         id: "confirmquit",
@@ -1542,13 +1544,15 @@ impl AppUi<'_> {
         let order: Vec<u32> = self.scene.structures().map(|(id, _)| id.to_raw()).collect();
         let mut movie = self.movie.movie.clone();
         movie.remap_structures(|raw| order.iter().position(|&id| id == raw).map(|i| i as u32));
-        capture_view(
+        let mut view = capture_view(
             self.view,
             self.camera,
             self.dock_layout,
             self.timeline,
             &movie,
-        )
+        );
+        view["sequence"] = self.sequence.snapshot();
+        view
     }
 
     /// Applies a `view` block written by `view_snapshot`. `ids` maps a
@@ -1557,6 +1561,7 @@ impl AppUi<'_> {
     fn apply_view_snapshot(&mut self, view: &serde_json::Value, ids: &[Option<StructureId>]) {
         self.movie.release_camera();
         self.movie.selected = None;
+        self.sequence.restore(&view["sequence"]);
         if let Some(dock) = restore_view(
             view,
             self.view,

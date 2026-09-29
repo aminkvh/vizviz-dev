@@ -11,9 +11,11 @@ mod cdr;
 mod numbering;
 mod profile;
 mod seeds;
+mod topology;
 
 pub use cdr::{CdrDefinition, Region};
 pub use numbering::{Label, Scheme};
+pub use topology::{cdr_residues, find_in_residues, CdrResidue};
 
 use align::{align, Alignment, Slot};
 use profile::{aa_index, profiles, Profile, C104, C23, W41};
@@ -24,6 +26,24 @@ pub enum ChainType {
     Heavy,
     Kappa,
     Lambda,
+}
+
+impl ChainType {
+    pub fn name(self) -> &'static str {
+        match self {
+            ChainType::Heavy => "Heavy",
+            ChainType::Kappa => "Kappa",
+            ChainType::Lambda => "Lambda",
+        }
+    }
+
+    /// `H` for heavy, `L` for both light chains.
+    pub fn letter(self) -> char {
+        match self {
+            ChainType::Heavy => 'H',
+            ChainType::Kappa | ChainType::Lambda => 'L',
+        }
+    }
 }
 
 /// A residue of a domain with its number and region.

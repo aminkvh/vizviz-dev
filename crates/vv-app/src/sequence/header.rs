@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use egui::{vec2, Sense, Ui};
+use vv_core::antibody::{CdrDefinition, Scheme};
 use vv_scene::Scene;
 
 use super::color::{from_packed, SCHEMES};
@@ -15,6 +16,9 @@ pub fn show(ui: &mut Ui, state: &mut SequenceState, scene: &Scene) {
     ui.horizontal_wrapped(|ui| {
         color_choice(ui, state);
         tracks_menu(ui, state);
+        if state.track_on("antibody") {
+            antibody_choices(ui, state);
+        }
         if state.legend {
             key_inline(ui, state, scene);
         } else if !state.tracks.is_empty() {
@@ -29,6 +33,23 @@ fn color_choice(ui: &mut Ui, state: &mut SequenceState) {
     let current = SCHEMES.iter().position(|s| s.0 == state.color);
     if let Some(i) = widgets::select(ui, "sequence-color", &labels, current, "None") {
         state.color = SCHEMES[i].0;
+    }
+}
+
+fn antibody_choices(ui: &mut Ui, state: &mut SequenceState) {
+    ui.label("Numbering");
+    let names: Vec<&str> = Scheme::ALL.iter().map(|s| s.name()).collect();
+    let current = Scheme::ALL.iter().position(|s| *s == state.antibody.scheme);
+    if let Some(i) = widgets::select(ui, "sequence-ab-scheme", &names, current, "Kabat") {
+        state.antibody.scheme = Scheme::ALL[i];
+    }
+    ui.label("CDRs");
+    let names: Vec<&str> = CdrDefinition::ALL.iter().map(|d| d.name()).collect();
+    let current = CdrDefinition::ALL
+        .iter()
+        .position(|d| *d == state.antibody.cdr);
+    if let Some(i) = widgets::select(ui, "sequence-ab-cdr", &names, current, "Kabat") {
+        state.antibody.cdr = CdrDefinition::ALL[i];
     }
 }
 
@@ -62,7 +83,7 @@ fn key_rows(state: &mut SequenceState, scene: &Scene) -> Vec<(&'static str, Arc<
     let mut rows = Vec::new();
     for provider in enabled {
         let data = scene.structures().find_map(|(id, loaded)| {
-            let data = state.cache.track(id, loaded, *provider);
+            let data = state.cache.track(id, loaded, *provider, state.antibody);
             let all = 0..loaded.structure.topology.residue_count() as u32;
             data.any_in(&all).then_some(data)
         });

@@ -9,7 +9,7 @@ use vv_scene::{ColorScheme, LoadedStructure, Scene, StructureId};
 
 use super::color::{residue_colors, ColorInput, SeqColor};
 use super::rows::chain_rows;
-use super::tracks::{TrackContext, TrackData, TrackProvider};
+use super::tracks::{AntibodySettings, TrackContext, TrackData, TrackProvider};
 
 /// Structures larger than this skip the solvent-accessibility scheme: its
 /// cost grows with atom count and runs on the UI thread.
@@ -21,6 +21,7 @@ struct Stamp {
     residues: usize,
     atoms: usize,
     frame: usize,
+    antibody: Option<AntibodySettings>,
 }
 
 impl Stamp {
@@ -30,6 +31,7 @@ impl Stamp {
             residues: loaded.structure.topology.residue_count(),
             atoms: loaded.structure.topology.atom_count(),
             frame: if per_frame { frame } else { 0 },
+            antibody: None,
         }
     }
 }
@@ -66,8 +68,10 @@ impl Cache {
         id: StructureId,
         loaded: &LoadedStructure,
         provider: &dyn TrackProvider,
+        antibody: AntibodySettings,
     ) -> Arc<TrackData> {
-        let stamp = Stamp::of(loaded, loaded.frame, provider.per_frame());
+        let mut stamp = Stamp::of(loaded, loaded.frame, provider.per_frame());
+        stamp.antibody = provider.uses_antibody_settings().then_some(antibody);
         let key = (id, provider.id());
         if let Some(hit) = self.tracks.get(&key).filter(|c| c.stamp == stamp) {
             return hit.value.clone();
@@ -78,6 +82,7 @@ impl Cache {
             loaded,
             positions: coords.positions(),
             rows: &rows,
+            antibody,
         };
         let value = Arc::new(provider.compute(&ctx));
         self.tracks.insert(
@@ -226,8 +231,18 @@ mod tests {
         let (mut scene, id) = open("small/1CRN.pdb");
         let mut cache = Cache::default();
         let provider = crate::sequence::tracks::provider("disulfide").unwrap();
-        let first = cache.track(id, scene.structure(id).unwrap(), provider);
-        let second = cache.track(id, scene.structure(id).unwrap(), provider);
+        let first = cache.track(
+            id,
+            scene.structure(id).unwrap(),
+            provider,
+            Default::default(),
+        );
+        let second = cache.track(
+            id,
+            scene.structure(id).unwrap(),
+            provider,
+            Default::default(),
+        );
         assert!(Arc::ptr_eq(&first, &second));
         let mut history = CommandHistory::new(10);
         history

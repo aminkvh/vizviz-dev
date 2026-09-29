@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use vv_core::antibody::{CdrDefinition, Scheme};
 use vv_core::glam::Vec3;
 use vv_scene::LoadedStructure;
 
@@ -21,6 +22,25 @@ pub enum Glyph {
     Ticks,
     /// A marker on the residue's edge: kind 1 left, kind 2 right.
     Edge,
+    /// A bar row under a row of tick labels; labels come from
+    /// [`TrackData::set_tick`] and badges from [`TrackData::set_badge`].
+    LabeledBar,
+}
+
+/// The antibody track's two independent choices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AntibodySettings {
+    pub scheme: Scheme,
+    pub cdr: CdrDefinition,
+}
+
+impl Default for AntibodySettings {
+    fn default() -> Self {
+        Self {
+            scheme: Scheme::Kabat,
+            cdr: CdrDefinition::Kabat,
+        }
+    }
 }
 
 pub struct LegendEntry {
@@ -36,6 +56,8 @@ pub struct TrackData {
     pub legend: Vec<LegendEntry>,
     kind: Vec<u8>,
     notes: BTreeMap<u32, String>,
+    ticks: BTreeMap<u32, String>,
+    badges: BTreeMap<u32, String>,
     marked_before: Vec<u32>,
 }
 
@@ -48,6 +70,8 @@ impl TrackData {
             legend,
             kind: vec![0; residues],
             notes: BTreeMap::new(),
+            ticks: BTreeMap::new(),
+            badges: BTreeMap::new(),
             marked_before: Vec::new(),
         }
     }
@@ -64,6 +88,24 @@ impl TrackData {
             entry.push('\n');
         }
         entry.push_str(line.as_ref());
+    }
+
+    /// Text drawn above residue `r` by [`Glyph::LabeledBar`].
+    pub fn set_tick(&mut self, r: u32, text: String) {
+        self.ticks.insert(r, text);
+    }
+
+    pub fn tick(&self, r: u32) -> Option<&str> {
+        self.ticks.get(&r).map(String::as_str)
+    }
+
+    /// A small tag drawn at residue `r`'s bar.
+    pub fn set_badge(&mut self, r: u32, text: &str) {
+        self.badges.insert(r, text.to_string());
+    }
+
+    pub fn badges(&self) -> impl Iterator<Item = (u32, &str)> {
+        self.badges.iter().map(|(&r, t)| (r, t.as_str()))
     }
 
     /// Freezes the track and indexes it for [`TrackData::any_in`].
@@ -112,6 +154,7 @@ pub struct TrackContext<'a> {
     pub positions: &'a [Vec3],
     /// The strip's rows for this structure: chain name and residues.
     pub rows: &'a [(String, Range<u32>)],
+    pub antibody: AntibodySettings,
 }
 
 impl TrackContext<'_> {
@@ -128,10 +171,7 @@ impl TrackContext<'_> {
 ///
 /// Hook for further tracks: implement this and add the unit struct to
 /// [`PROVIDERS`]. The track appears in the header's Tracks menu and answers
-/// `sequence track <id> on|off` with no other change. An antibody
-/// numbering / CDR track registers here: it reads `ctx.rows` and
-/// `ctx.top()` and returns a `TrackData` (`Glyph::Ticks` for a scheme's
-/// numbers, `Glyph::Bar` with a legend for CDRs and frameworks).
+/// `sequence track <id> on|off` with no other change.
 pub trait TrackProvider: Sync {
     /// The name `sequence track` takes.
     fn id(&self) -> &'static str;
@@ -139,6 +179,10 @@ pub trait TrackProvider: Sync {
     fn label(&self) -> &'static str;
     /// Whether the result changes with the frame (geometry-dependent).
     fn per_frame(&self) -> bool {
+        false
+    }
+    /// Whether the result changes with [`TrackContext::antibody`].
+    fn uses_antibody_settings(&self) -> bool {
         false
     }
     fn compute(&self, ctx: &TrackContext) -> TrackData;
@@ -160,6 +204,7 @@ pub const PROVIDERS: &[&dyn TrackProvider] = &[
     &super::providers::Interface,
     &super::providers::AltLocs,
     &super::providers::Modified,
+    &super::providers::Antibody,
 ];
 
 pub fn legend(label: &str, color: u32) -> LegendEntry {

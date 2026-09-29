@@ -15,6 +15,7 @@ use fixedbitset::FixedBitSet;
 use glam::Vec3;
 use rayon::prelude::*;
 
+use crate::antibody::{cdr_residues, CdrDefinition};
 use crate::{
     flags, Element, Grid, InternId, ResidueClass, ResidueRec, Roles, SecondaryStructure, Topology,
 };
@@ -95,6 +96,14 @@ pub enum Field {
     Index,
 }
 
+/// One `cdr` argument: a chain type (`H` heavy, `L` light) and optionally
+/// one of its three CDRs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CdrPick {
+    pub chain: char,
+    pub cdr: Option<u8>,
+}
+
 /// Float per-atom columns selectable by comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Column {
@@ -128,6 +137,8 @@ pub enum Expr {
     Altloc(Vec<u8>),
     /// Inclusive `(lo, hi)` ranges.
     Range(Field, Vec<(i64, i64)>),
+    /// Antibody CDR residues under a definition; no picks means every CDR.
+    Cdr(CdrDefinition, Vec<CdrPick>),
     Compare(Column, Cmp, f32),
     /// Atoms within the distance (inclusive) of any atom of the inner set;
     /// the inner atoms themselves are included.
@@ -232,6 +243,7 @@ enum Kw {
     Element,
     Altloc,
     Range(Field),
+    Cdr,
     Compare(Column),
     Within,
     Byres,
@@ -274,6 +286,7 @@ fn keyword(word: &str) -> Option<Kw> {
         "seqid" => Kw::Range(Field::Seqid),
         "serial" => Kw::Range(Field::Serial),
         "index" => Kw::Range(Field::Index),
+        "cdr" => Kw::Cdr,
         "bfactor" => Kw::Compare(Column::Bfactor),
         "occupancy" => Kw::Compare(Column::Occupancy),
         "within" => Kw::Within,
@@ -409,6 +422,7 @@ impl<'a> Parser<'a> {
             Some(Kw::Element) => self.elements(&tok),
             Some(Kw::Altloc) => self.altlocs(&tok),
             Some(Kw::Range(field)) => self.ranges(&tok, field),
+            Some(Kw::Cdr) => self.cdr(),
             Some(Kw::Compare(column)) => self.compare(&tok, column),
             Some(Kw::Within) => self.within(&tok),
             // The operand binds tighter than `and`/`or`, like `not`.
@@ -433,6 +447,14 @@ impl<'a> Parser<'a> {
     /// The value tokens after a keyword: every word up to the next keyword,
     /// operator, parenthesis or the end. At least one is required.
     fn values(&mut self, kw: &Token<'a>) -> Parsed<Vec<Token<'a>>> {
+        let out = self.optional_values();
+        if out.is_empty() {
+            return Err(self.expected(kw, "one or more values"));
+        }
+        Ok(out)
+    }
+
+    fn optional_values(&mut self) -> Vec<Token<'a>> {
         let mut out = Vec::new();
         while let Some(t) = self.peek() {
             match t.tok {
@@ -441,10 +463,22 @@ impl<'a> Parser<'a> {
             }
             self.pos += 1;
         }
-        if out.is_empty() {
-            return Err(self.expected(kw, "one or more values"));
+        out
+    }
+
+    /// `cdr [definition] [h1|h2|h3|l1|l2|l3|h|l ...]`.
+    fn cdr(&mut self) -> Parsed<Expr> {
+        let mut definition = CdrDefinition::Kabat;
+        let mut picks = Vec::new();
+        for t in self.optional_values() {
+            let word = self.text(&t);
+            if let Some(d) = CdrDefinition::parse(word) {
+                definition = d;
+            } else {
+                picks.push(parse_cdr_pick(word, t.span.clone())?);
+            }
         }
-        Ok(out)
+        Ok(Expr::Cdr(definition, picks))
     }
 
     fn strings(&mut self, kw: &Token<'a>) -> Parsed<Vec<String>> {
@@ -570,6 +604,30 @@ fn parse_range(word: &str, span: Range<usize>) -> Parsed<(i64, i64)> {
     Ok((lo, hi))
 }
 
+fn parse_cdr_pick(word: &str, span: Range<usize>) -> Parsed<CdrPick> {
+    let lower = word.to_ascii_lowercase();
+    let mut chars = lower.chars();
+    let pick = match (chars.next(), chars.next(), chars.next()) {
+        (Some(c @ ('h' | 'l')), None, _) => Some(CdrPick {
+            chain: c.to_ascii_uppercase(),
+            cdr: None,
+        }),
+        (Some(c @ ('h' | 'l')), Some(n @ '1'..='3'), None) => Some(CdrPick {
+            chain: c.to_ascii_uppercase(),
+            cdr: Some(n as u8 - b'0'),
+        }),
+        _ => None,
+    };
+    pick.ok_or_else(|| {
+        SelectError::new(
+            format!(
+                "unknown cdr option `{word}`; expected h1, h2, h3, l1, l2, l3, h, l                  or a definition (kabat, chothia, imgt, contact, north)"
+            ),
+            span,
+        )
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Evaluation
 
@@ -603,6 +661,7 @@ impl Expr {
                 atom_mask(n, |i| t.alt_loc.get(i).is_some_and(|a| chars.contains(a)))
             }
             Expr::Range(field, ranges) => range_mask(t, *field, ranges),
+            Expr::Cdr(definition, picks) => cdr_mask(t, *definition, picks),
             Expr::Compare(column, cmp, value) => {
                 let column = match column {
                     Column::Bfactor => &t.b_factor,
@@ -684,6 +743,20 @@ fn chain_mask(t: &Topology, ids: &[String]) -> FixedBitSet {
         .map(|c| wanted.contains(&c.label_asym) || wanted.contains(&c.auth_asym))
         .collect();
     residue_mask(t, |_, r| hit[r.chain as usize])
+}
+
+fn cdr_mask(t: &Topology, definition: CdrDefinition, picks: &[CdrPick]) -> FixedBitSet {
+    let wanted = |chain: char, cdr: u8| {
+        picks.is_empty()
+            || picks
+                .iter()
+                .any(|p| p.chain == chain && p.cdr.is_none_or(|c| c == cdr))
+    };
+    let mut hit = vec![false; t.residue_count()];
+    for r in cdr_residues(t, definition) {
+        hit[r.residue as usize] = wanted(r.chain.letter(), r.cdr);
+    }
+    residue_mask(t, |i, _| hit[i])
 }
 
 fn segname_mask(t: &Topology, ids: &[String]) -> FixedBitSet {

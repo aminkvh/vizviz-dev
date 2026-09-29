@@ -23,6 +23,14 @@ for domain in find_domains(seq) {                      // empty for non-antibodi
 | `Domain::numbering(Scheme) -> Vec<(usize, Label)>` | `Scheme` is `Imgt`, `Kabat`, `Chothia` or `Martin`. IMGT insertion letters stand for `.1`, `.2`, ... (`112A` is 112.1). |
 | `Domain::annotate(Scheme, CdrDefinition) -> Vec<Annotation>` | Label plus `Region`, with CDR edges from `Kabat`, `Chothia`, `Imgt`, `Contact` or `North`. The two choices are independent. |
 | `find_domains_with(seq, min_confidence)` | Same, with your own cutoff. |
+| `find_in_residues(&Topology, range)` | Domains of a chain's protein residues; offsets are from the range start. |
+| `cdr_residues(&Topology, CdrDefinition)` | Every CDR residue of a structure, chains in parallel. |
+
+In the app, the same detection drives the Sequence panel's `antibody` track
+([Sequence](SEQUENCE.md)) and the `cdr` selection keyword (`select cdr h3`,
+Kabat unless a definition is named; [Selections](SELECTION.md)). Detection
+runs once per structure and again only when the numbering or definition
+changes, never per frame.
 
 `find_domains` is single threaded and allocation-light; run it from rayon
 for bulk work.

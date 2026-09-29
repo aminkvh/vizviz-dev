@@ -1,6 +1,8 @@
 //! `sequence color|track|tracks|legend`: the Sequence panel header's
 //! choices as commands.
 
+use vv_core::antibody::{CdrDefinition, Scheme};
+
 use super::color::{SeqColor, SCHEMES};
 use super::tracks::{provider, PROVIDERS};
 use crate::commands::parse_on_off;
@@ -16,6 +18,7 @@ impl AppUi<'_> {
             "track" => self.sequence_track(arg),
             "tracks" => self.sequence_tracks(arg),
             "legend" | "key" => self.sequence_legend(arg),
+            "antibody" => self.sequence_antibody(arg),
             other => Err(format!("unknown sequence option `{other}`")),
         }
     }
@@ -81,6 +84,36 @@ impl AppUi<'_> {
             }
             _ => Err("expected `sequence tracks [all|none]`".into()),
         }
+    }
+
+    fn sequence_antibody(&mut self, arg: &str) -> Result<String, String> {
+        let (what, name) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
+        let name = name.trim();
+        let settings = &mut self.sequence.antibody;
+        match (what, name) {
+            ("", _) => {}
+            ("scheme", _) => {
+                settings.scheme = Scheme::parse(name).ok_or_else(|| {
+                    let all: Vec<&str> = Scheme::ALL.iter().map(|s| s.name()).collect();
+                    format!("unknown numbering `{name}`; expected {}", all.join(", "))
+                })?;
+            }
+            ("cdr", _) => {
+                settings.cdr = CdrDefinition::parse(name).ok_or_else(|| {
+                    let all: Vec<&str> = CdrDefinition::ALL.iter().map(|d| d.name()).collect();
+                    format!(
+                        "unknown CDR definition `{name}`; expected {}",
+                        all.join(", ")
+                    )
+                })?;
+            }
+            _ => return Err("expected `sequence antibody [scheme NAME | cdr NAME]`".into()),
+        }
+        Ok(format!(
+            "sequence antibody: numbering {}, CDRs {}",
+            settings.scheme.name(),
+            settings.cdr.name()
+        ))
     }
 
     fn sequence_legend(&mut self, arg: &str) -> Result<String, String> {

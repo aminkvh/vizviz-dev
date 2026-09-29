@@ -45,6 +45,7 @@ binds tighter than `or`; use parentheses to override.
 | `serial 100-200` | atom serial numbers from the file |
 | `index 0-9` | 0-based atom indices |
 | `altloc A` | atoms tagged with these alternate-location ids (untagged atoms are not included; the `altloc` command chooses which conformer draws) |
+| `cdr [DEFINITION] [h1 h2 h3 l1 l2 l3 h l]` | antibody CDR residues (light chains, kappa or lambda, are `l`). No arguments selects all six CDRs; `h` or `l` picks a chain's three. `DEFINITION` is `kabat` (default), `chothia`, `imgt`, `contact` or `north`. Domains are found from the sequence, so `cdr h3 and chain B` and `byres within 5 of cdr` work. See [Antibodies](ANTIBODY.md) |
 | `bfactor < 20`, `occupancy >= 0.5` | numeric compare: `< <= > >= == !=` |
 | `within 5 of <expr>` | atoms within 5 Å of any atom of `<expr>` (inclusive; `<expr>` is included) |
 | `byres <expr>` | expand `<expr>` to whole residues |

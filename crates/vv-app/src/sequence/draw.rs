@@ -6,8 +6,8 @@ use std::ops::Range;
 use egui::{pos2, vec2, Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke};
 use vv_core::Topology;
 
-use super::color::{from_packed, text_on};
-use super::layout::{Block, TrackLine};
+use super::color::{from_packed, readable_on, tint};
+use super::layout::{Block, TrackLine, TICK_HEIGHT};
 use super::rows::{one_letter, residue_number};
 use super::tracks::Glyph;
 
@@ -16,6 +16,11 @@ pub struct Paint<'a> {
     pub painter: &'a Painter,
     pub origin: Pos2,
     pub label_width: f32,
+    /// Left edge of the label column: pinned to the visible area.
+    pub label_x: f32,
+    pub panel: Color32,
+    /// Whether residue chips are drawn as soft tints.
+    pub soft: bool,
     pub advance: f32,
     pub row_h: f32,
     pub font: FontId,
@@ -42,7 +47,6 @@ pub fn block(
     selected: Option<&[bool]>,
     columns: Range<usize>,
 ) {
-    sequence_label(p, b);
     for column in columns.start..columns.end.min(b.row.residues.len()) {
         let residue = b.row.residues.start as usize + column;
         let cell = p.cell(b, column, 0.0, p.row_h);
@@ -59,35 +63,75 @@ pub fn block(
         );
     }
     for line in &b.tracks {
-        track_label(p, b, line);
         for column in columns.start..columns.end.min(b.row.residues.len()) {
             let residue = b.row.residues.start + column as u32;
             glyph(p, b, line, top, residue, column);
         }
+        badges(p, b, line);
     }
+    labels(p, b);
 }
 
-fn sequence_label(p: &Paint, b: &Block) {
+/// The label column over the letters, so it stays put while they scroll.
+fn labels(p: &Paint, b: &Block) {
+    let top = p.origin.y + b.top;
+    let pane = Rect::from_min_size(pos2(p.label_x, top), vec2(p.label_width, b.height));
+    p.painter.rect_filled(pane, 0.0, p.panel);
     p.painter.text(
-        pos2(p.origin.x + 4.0, p.origin.y + b.top + p.row_h * 0.5),
+        pos2(p.label_x + 4.0, top + p.row_h * 0.5),
         Align2::LEFT_CENTER,
         &b.row.label,
         p.font.clone(),
         p.text,
     );
+    for line in &b.tracks {
+        p.painter.text(
+            pos2(
+                p.label_x + TRACK_INDENT,
+                top + line.offset + line.height * 0.5,
+            ),
+            Align2::LEFT_CENTER,
+            line.provider.label(),
+            p.small.clone(),
+            p.dim,
+        );
+    }
 }
 
-fn track_label(p: &Paint, b: &Block, line: &TrackLine) {
-    p.painter.text(
-        pos2(
-            p.origin.x + 14.0,
-            p.origin.y + b.top + line.offset + line.height * 0.5,
-        ),
-        Align2::LEFT_CENTER,
-        line.provider.label(),
-        p.small.clone(),
-        p.dim,
-    );
+/// Where a track's label starts, right of the chain label's edge.
+pub const TRACK_INDENT: f32 = 14.0;
+
+/// Tags such as a domain's chain type, on the bar row of their residue.
+fn badges(p: &Paint, b: &Block, line: &TrackLine) {
+    for (residue, text) in line.data.badges() {
+        if !b.row.residues.contains(&residue) {
+            continue;
+        }
+        let column = (residue - b.row.residues.start) as usize;
+        let bar = p
+            .cell(
+                b,
+                column,
+                line.offset + TICK_HEIGHT,
+                line.height - TICK_HEIGHT,
+            )
+            .shrink2(vec2(0.0, 1.5));
+        let galley = p
+            .painter
+            .layout_no_wrap(text.to_string(), p.small.clone(), p.dim);
+        let pill = Rect::from_min_size(
+            bar.min + vec2(2.0, 0.0),
+            vec2(galley.size().x + 8.0, bar.height()),
+        );
+        let fill = Color32::from_rgb(0x4A, 0x55, 0x66);
+        p.painter.rect_filled(pill, 3.0, fill);
+        let color = readable_on(fill, Color32::WHITE);
+        p.painter.galley_with_override_text_color(
+            pill.min + vec2(4.0, (pill.height() - galley.size().y) * 0.5),
+            galley,
+            color,
+        );
+    }
 }
 
 fn letter(
@@ -105,11 +149,11 @@ fn letter(
         Some(glyph) => (glyph, p.text),
         None => ('x', p.dim),
     };
-    if let Some(fill) = chip {
+    if let Some(fill) = chip.map(|c| if p.soft { tint(c, p.panel) } else { c }) {
         let inset = if selected { 2.5 } else { 1.0 };
         p.painter
             .rect_filled(cell.shrink2(vec2(inset, inset + 0.5)), 2.0, fill);
-        color = text_on(fill);
+        color = readable_on(fill, p.text);
     }
     p.painter.text(
         cell.center(),
@@ -136,6 +180,7 @@ fn glyph(p: &Paint, b: &Block, line: &TrackLine, top: &Topology, residue: u32, c
             structure_glyph(p, line, residue, kind, cell, color, b.row.residues.end)
         }
         Glyph::Ticks => tick(p, cell, &residue_number(top, residue)),
+        Glyph::LabeledBar => labeled_bar(p, line, cell, residue, color),
         Glyph::Edge => edge(p, cell, kind, color),
     }
 }
@@ -180,6 +225,15 @@ fn arrow_head(p: &Paint, cell: Rect, color: Color32) {
         color,
         Stroke::NONE,
     ));
+}
+
+fn labeled_bar(p: &Paint, line: &TrackLine, cell: Rect, residue: u32, color: Color32) {
+    let (ticks, bar) = cell.split_top_bottom_at_y(cell.top() + TICK_HEIGHT);
+    if let Some(text) = line.data.tick(residue) {
+        tick(p, ticks, text);
+    }
+    p.painter
+        .rect_filled(bar.shrink2(vec2(0.0, 1.5)), 1.0, color);
 }
 
 fn tick(p: &Paint, cell: Rect, number: &str) {

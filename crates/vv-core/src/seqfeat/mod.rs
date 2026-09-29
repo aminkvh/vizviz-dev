@@ -4,12 +4,14 @@
 //! Python bindings can share them.
 
 pub mod contacts;
+mod letters;
 pub mod links;
 pub mod missing;
 pub mod motifs;
 pub mod sasa;
 
 pub use contacts::{residue_contacts, ResidueContact};
+pub use letters::one_letter;
 pub use links::{disulfides, glycosylated, Glycosylation};
 pub use missing::{unobserved, Gap, Unobserved};
 pub use motifs::{liabilities, sequons, Hit, Liability, Sequon, SequonKind};

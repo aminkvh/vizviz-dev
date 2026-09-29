@@ -479,6 +479,8 @@ pub enum LayoutRequest {
     ClosePanel(Tab),
     /// Reopen a closed panel as a tab of that node.
     AddPanel(egui_dock::NodePath, Tab),
+    /// Give the Sequence panel this many more pixels, up to half its split.
+    GrowSequence(f32),
     /// Replace the dock layout outright (a loaded session's `dock_layout`).
     LoadState(Box<egui_dock::DockState<Tab>>),
 }

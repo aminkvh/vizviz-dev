@@ -57,6 +57,15 @@ impl SeqColor {
         SCHEMES.iter().find(|s| s.1 == alias).map(|s| s.0)
     }
 
+    /// Whether the colors name discrete classes (drawn as soft tints)
+    /// rather than sample a continuous ramp.
+    pub fn categorical(self) -> bool {
+        !matches!(
+            self,
+            SeqColor::None | SeqColor::Hydrophobicity | SeqColor::BFactor | SeqColor::Sasa
+        )
+    }
+
     /// Whether the colors change with the frame.
     pub fn per_frame(self) -> bool {
         matches!(
@@ -79,11 +88,47 @@ pub fn from_packed(packed: u32) -> Color32 {
     Color32::from_rgb(packed as u8, (packed >> 8) as u8, (packed >> 16) as u8)
 }
 
-/// Text that reads on `fill`: near-black on light chips, white on dark.
-pub fn text_on(fill: Color32) -> Color32 {
-    let lum = 0.299 * fill.r() as f32 + 0.587 * fill.g() as f32 + 0.114 * fill.b() as f32;
-    if lum > 150.0 {
-        Color32::from_gray(25)
+/// Share of a categorical color kept when it is mixed into the panel.
+const TINT: f32 = 0.38;
+/// WCAG AA for body text.
+const MIN_CONTRAST: f32 = 4.5;
+
+/// `fill` as a soft tint over `panel`.
+pub fn tint(fill: Color32, panel: Color32) -> Color32 {
+    let mix = |a: u8, b: u8| (b as f32 + (a as f32 - b as f32) * TINT).round() as u8;
+    Color32::from_rgb(
+        mix(fill.r(), panel.r()),
+        mix(fill.g(), panel.g()),
+        mix(fill.b(), panel.b()),
+    )
+}
+
+/// WCAG 2 relative luminance of an sRGB color.
+fn luminance(c: Color32) -> f32 {
+    let lin = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// `preferred` text if it reads on `fill` (WCAG AA), else black or white,
+/// whichever contrasts more.
+pub fn readable_on(fill: Color32, preferred: Color32) -> Color32 {
+    if contrast_ratio(preferred, fill) >= MIN_CONTRAST {
+        return preferred;
+    }
+    if contrast_ratio(Color32::BLACK, fill) >= contrast_ratio(Color32::WHITE, fill) {
+        Color32::BLACK
     } else {
         Color32::WHITE
     }
@@ -176,25 +221,23 @@ fn sasa_colors(input: &ColorInput) -> Vec<Color32> {
         .collect()
 }
 
+fn name_color(scheme: SeqColor, name: &str) -> Option<u32> {
+    match scheme {
+        SeqColor::Chemistry => vc::by_residue_type(name).or_else(|| vc::by_nucleotide(name)),
+        SeqColor::Hydrophobicity => {
+            vc::kyte_doolittle(name).map(|v| vc::by_hydropathy(v, vc::KD_SCALE))
+        }
+        SeqColor::Charge => charge_color(name),
+        SeqColor::Clustal => vc::by_clustal(name),
+        SeqColor::Zappo => vc::by_zappo(name),
+        SeqColor::Taylor => vc::by_taylor(name),
+        _ => None,
+    }
+}
+
 fn by_name(scheme: SeqColor, top: &vv_core::Topology) -> Vec<Color32> {
     (0..top.residue_count())
-        .map(|r| {
-            let name = top.residue_name(r);
-            let packed = match scheme {
-                SeqColor::Chemistry => {
-                    vc::by_residue_type(name).or_else(|| vc::by_nucleotide(name))
-                }
-                SeqColor::Hydrophobicity => {
-                    vc::kyte_doolittle(name).map(|v| vc::by_hydropathy(v, vc::KD_SCALE))
-                }
-                SeqColor::Charge => charge_color(name),
-                SeqColor::Clustal => vc::by_clustal(name),
-                SeqColor::Zappo => vc::by_zappo(name),
-                SeqColor::Taylor => vc::by_taylor(name),
-                _ => None,
-            };
-            packed.map_or(Color32::TRANSPARENT, from_packed)
-        })
+        .map(|r| name_color(scheme, top.residue_name(r)).map_or(Color32::TRANSPARENT, from_packed))
         .collect()
 }
 
@@ -222,9 +265,54 @@ mod tests {
         assert_eq!(SeqColor::parse("nope"), None);
     }
 
+    const RESIDUES: [&str; 25] = [
+        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", "LEU", "LYS", "MET",
+        "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL", "MSE", "A", "C", "G", "U",
+    ];
+
+    fn chip_colors(scheme: SeqColor) -> Vec<Color32> {
+        let mut out: Vec<Color32> = RESIDUES
+            .iter()
+            .filter_map(|n| name_color(scheme, n))
+            .map(from_packed)
+            .collect();
+        if scheme == SeqColor::SecondaryStructure {
+            use vv_core::dssp::DsspCode::*;
+            out.extend(
+                [AlphaHelix, Helix3_10, HelixPi, Strand, Bridge, Turn]
+                    .map(|c| from_packed(vc::by_secondary_structure(c))),
+            );
+        }
+        out
+    }
+
     #[test]
-    fn text_contrasts_with_its_chip() {
-        assert_eq!(text_on(Color32::WHITE), Color32::from_gray(25));
-        assert_eq!(text_on(Color32::from_rgb(0x2E, 0x5E, 0xAA)), Color32::WHITE);
+    fn every_categorical_chip_is_readable_in_both_themes() {
+        use crate::theme::{ThemeMode, Tokens};
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let t = Tokens::of(mode);
+            for (scheme, word, _) in SCHEMES.iter().filter(|s| s.0.categorical()) {
+                for fill in chip_colors(*scheme) {
+                    let chip = tint(fill, t.surface);
+                    let text = readable_on(chip, t.text);
+                    assert!(
+                        contrast_ratio(text, chip) >= MIN_CONTRAST,
+                        "{word} {fill:?} in {mode:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_tint_is_softer_than_its_color_and_ramps_stay_readable() {
+        let panel = Color32::from_rgb(0xF6, 0xF8, 0xFC);
+        let soft = tint(Color32::from_rgb(255, 0, 0), panel);
+        assert!(soft.g() > 100 && soft.r() > 200, "{soft:?}");
+        for v in (0..=255u8).step_by(15) {
+            let fill = Color32::from_rgb(v, 255 - v, 128);
+            let text = readable_on(fill, Color32::from_gray(40));
+            assert!(contrast_ratio(text, fill) >= MIN_CONTRAST, "{fill:?}");
+        }
     }
 }

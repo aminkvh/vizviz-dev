@@ -27,6 +27,7 @@ fn run(provider: &dyn TrackProvider, loaded: &LoadedStructure) -> TrackData {
         loaded,
         positions: coords.positions(),
         rows: &rows,
+        antibody: Default::default(),
     })
 }
 

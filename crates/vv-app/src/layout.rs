@@ -102,6 +102,28 @@ pub fn default_layout() -> DockState<Tab> {
     state
 }
 
+/// Most of its split the Sequence panel may claim to fit its tracks.
+const SEQUENCE_MAX_FRACTION: f32 = 0.5;
+
+/// Makes the Sequence panel `px` taller by moving its split, if it sits
+/// above the viewport (the top child of a vertical split).
+pub fn grow_sequence(state: &mut DockState<Tab>, px: f32) {
+    let tree = state.main_surface_mut();
+    let Some((node, _)) = tree.find_tab(&Tab::Sequence) else {
+        return;
+    };
+    let Some(parent) = node.parent().filter(|_| node.is_left()) else {
+        return;
+    };
+    if let egui_dock::Node::Vertical(split) = &mut tree[parent] {
+        let total = split.rect.height();
+        if total > 1.0 {
+            let grown = split.fraction + px / total;
+            split.fraction = grown.clamp(split.fraction, SEQUENCE_MAX_FRACTION.max(split.fraction));
+        }
+    }
+}
+
 /// The viewport sits alone in its own open leaf of the main surface: never
 /// tabbed with a panel, collapsed or floated. The dock undoes any move that
 /// breaks this.

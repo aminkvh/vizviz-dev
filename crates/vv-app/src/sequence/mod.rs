@@ -17,6 +17,7 @@ mod command;
 mod draw;
 mod header;
 mod layout;
+mod prefs;
 mod providers;
 mod rows;
 mod tooltip;
@@ -25,11 +26,15 @@ mod tracks;
 use egui::{Sense, Ui};
 use vv_scene::{Scene, StructureId};
 
-use crate::ui::AppUi;
+use crate::ui::{AppUi, LayoutRequest};
 use color::SeqColor;
+use tracks::AntibodySettings;
 
-/// Room for "<structure> <chain>" at the left of every row.
-const LABEL_WIDTH: f32 = 96.0;
+/// Narrowest label column: room for "<structure> <chain>".
+const MIN_LABEL_WIDTH: f32 = 96.0;
+/// Panel height beyond the strip that a fit leaves free, for the
+/// horizontal scroll bar.
+const FIT_SLACK: f32 = 16.0;
 
 /// What the strip shows, and what it has computed for it.
 pub struct SequenceState {
@@ -37,6 +42,9 @@ pub struct SequenceState {
     /// Ids of the enabled tracks (`tracks::PROVIDERS`).
     pub tracks: Vec<&'static str>,
     pub legend: bool,
+    pub antibody: AntibodySettings,
+    /// Strip height the panel was last fitted to.
+    fitted: Option<i32>,
     cache: cache::Cache,
 }
 
@@ -46,6 +54,8 @@ impl Default for SequenceState {
             color: SeqColor::None,
             tracks: Vec::new(),
             legend: false,
+            antibody: AntibodySettings::default(),
+            fitted: None,
             cache: cache::Cache::default(),
         }
     }
@@ -62,6 +72,31 @@ impl SequenceState {
             self.tracks.push(id);
         }
     }
+}
+
+/// Wide enough for every chain label and every shown track label.
+fn label_width(
+    ui: &Ui,
+    blocks: &[layout::Block],
+    font: &egui::FontId,
+    small: &egui::FontId,
+) -> f32 {
+    let width = |text: &str, font: &egui::FontId| {
+        ui.fonts_mut(|f| {
+            f.layout_no_wrap(text.to_string(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+    let mut wide = MIN_LABEL_WIDTH;
+    for b in blocks {
+        wide = wide.max(width(&b.row.label, font) + 12.0);
+        for line in &b.tracks {
+            let label = width(line.provider.label(), small);
+            wide = wide.max(label + draw::TRACK_INDENT + 12.0);
+        }
+    }
+    wide
 }
 
 /// A click on the strip: the residue, and whether it adds to the selection.
@@ -97,14 +132,26 @@ impl AppUi<'_> {
         small.size *= 0.85;
         let advance = ui.ctx().fonts_mut(|f| f.glyph_width(&font, 'W')) + 2.0;
         let row_h = ui.text_style_height(&egui::TextStyle::Monospace) + 6.0;
-        let blocks = layout::blocks(scene, &mut state.cache, &state.tracks, row_h);
+        let blocks = layout::blocks(
+            scene,
+            &mut state.cache,
+            &state.tracks,
+            state.antibody,
+            row_h,
+        );
         let longest = blocks
             .iter()
             .map(|b| b.row.residues.len())
             .max()
             .unwrap_or(0);
         let height = blocks.last().map_or(0.0, |b| b.top + b.height);
-        let total = egui::vec2(LABEL_WIDTH + longest as f32 * advance, height);
+        let label_width = label_width(ui, &blocks, &font, &small);
+        let total = egui::vec2(label_width + longest as f32 * advance, height);
+        let shortfall = height - ui.available_height();
+        if shortfall > 0.0 && state.fitted != Some(height as i32) {
+            state.fitted = Some(height as i32);
+            *self.layout_request = Some(LayoutRequest::GrowSequence(shortfall + FIT_SLACK));
+        }
         let selected = rows::selected_residues(scene);
         let mut chips = std::collections::HashMap::new();
         for b in &blocks {
@@ -124,7 +171,10 @@ impl AppUi<'_> {
                 let paint = draw::Paint {
                     painter: &painter,
                     origin: rect.min,
-                    label_width: LABEL_WIDTH,
+                    label_width,
+                    label_x: rect.min.x + viewport.min.x,
+                    panel: ui.visuals().panel_fill,
+                    soft: state.color.categorical(),
                     advance,
                     row_h,
                     font,
@@ -134,8 +184,8 @@ impl AppUi<'_> {
                     highlight: ui.visuals().selection.bg_fill,
                 };
                 let first_col =
-                    ((viewport.min.x - LABEL_WIDTH) / advance).floor().max(0.0) as usize;
-                let last_col = ((viewport.max.x - LABEL_WIDTH) / advance).ceil().max(0.0) as usize;
+                    ((viewport.min.x - label_width) / advance).floor().max(0.0) as usize;
+                let last_col = ((viewport.max.x - label_width) / advance).ceil().max(0.0) as usize;
                 let first = layout::block_at(&blocks, viewport.min.y).unwrap_or(0);
                 for b in blocks
                     .iter()
@@ -163,11 +213,11 @@ impl AppUi<'_> {
 
                 let hit = |pos: egui::Pos2| -> Option<(usize, usize)> {
                     let local = pos - rect.min;
-                    if local.x < LABEL_WIDTH {
+                    if local.x < label_width {
                         return None;
                     }
                     let i = layout::block_at(&blocks, local.y)?;
-                    let column = ((local.x - LABEL_WIDTH) / advance).floor() as usize;
+                    let column = ((local.x - label_width) / advance).floor() as usize;
                     (column < blocks[i].row.residues.len()).then_some((i, column))
                 };
                 if let Some((i, column)) = response.hover_pos().and_then(hit) {

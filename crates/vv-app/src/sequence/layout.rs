@@ -7,10 +7,10 @@ use vv_scene::Scene;
 
 use super::cache::Cache;
 use super::rows::{rows_of, Row};
-use super::tracks::{Glyph, TrackData, TrackProvider, PROVIDERS};
+use super::tracks::{AntibodySettings, Glyph, TrackData, TrackProvider, PROVIDERS};
 
-const BAR_HEIGHT: f32 = 13.0;
-const TICK_HEIGHT: f32 = 15.0;
+pub const BAR_HEIGHT: f32 = 13.0;
+pub const TICK_HEIGHT: f32 = 15.0;
 const BLOCK_GAP: f32 = 4.0;
 
 pub struct TrackLine {
@@ -31,6 +31,7 @@ pub struct Block {
 fn line_height(glyph: Glyph) -> f32 {
     match glyph {
         Glyph::Ticks => TICK_HEIGHT,
+        Glyph::LabeledBar => TICK_HEIGHT + BAR_HEIGHT,
         _ => BAR_HEIGHT,
     }
 }
@@ -40,6 +41,7 @@ fn track_lines(
     scene: &Scene,
     cache: &mut Cache,
     enabled: &[&'static str],
+    antibody: AntibodySettings,
     row_h: f32,
 ) -> Vec<TrackLine> {
     let Some(loaded) = scene.structure(row.structure) else {
@@ -48,7 +50,7 @@ fn track_lines(
     let mut offset = row_h;
     let mut lines = Vec::new();
     for provider in PROVIDERS.iter().filter(|p| enabled.contains(&p.id())) {
-        let data = cache.track(row.structure, loaded, *provider);
+        let data = cache.track(row.structure, loaded, *provider, antibody);
         if data.any_in(&row.residues) {
             let height = line_height(data.glyph);
             lines.push(TrackLine {
@@ -68,13 +70,14 @@ pub fn blocks(
     scene: &Scene,
     cache: &mut Cache,
     enabled: &[&'static str],
+    antibody: AntibodySettings,
     row_h: f32,
 ) -> Vec<Block> {
     let mut top = 0.0;
     rows_of(scene)
         .into_iter()
         .map(|row| {
-            let tracks = track_lines(&row, scene, cache, enabled, row_h);
+            let tracks = track_lines(&row, scene, cache, enabled, antibody, row_h);
             let height = tracks.last().map_or(row_h, |t| t.offset + t.height) + BLOCK_GAP;
             let block = Block {
                 row,

@@ -1,11 +1,15 @@
 //! The built-in annotation tracks.
 
+mod antibody;
+#[cfg(test)]
+mod antibody_tests;
 mod chemistry;
 mod site;
 mod structure;
 #[cfg(test)]
 mod tests;
 
+pub use antibody::Antibody;
 pub use chemistry::{AltLocs, Disulfides, Glycans, Liabilities, Modified};
 pub use site::{Interface, LigandSite};
 pub use structure::{Missing, Numbering, SecondaryStructure};

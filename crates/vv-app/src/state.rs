@@ -1091,6 +1091,7 @@ impl State {
                     None => self.workspaces.push((name, snapshot)),
                 }
             }
+            LayoutRequest::GrowSequence(px) => layout::grow_sequence(&mut self.dock_state, px),
             LayoutRequest::LoadState(state) => {
                 if layout::viewport_in_place(&state) {
                     self.dock_state = *state;

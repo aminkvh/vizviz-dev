@@ -39,10 +39,31 @@ of the enabled tracks.
 | `interface` | residues within 4.5 Å of another chain |
 | `altloc` | residues with alternate locations |
 | `modified` | non-standard amino acids |
+| `antibody` | variable domains (heavy, kappa, lambda) with the numbering scheme's labels above framework and CDR bars, and a Heavy/Kappa/Lambda badge where each domain starts. Hover for `H52A · CDR-H2 (Kabat)`. See [Antibodies](ANTIBODY.md) |
 
 Motifs never span a numbering gap. Motifs are risks to check, not
 predictions: most NG sites do not deamidate, and a sequon is necessary but
 not sufficient for glycosylation.
+
+### Antibody settings
+
+With the `antibody` track on, the header adds two menus: the numbering
+(`sequence antibody scheme kabat|chothia|imgt|martin`) and the CDR
+definition (`sequence antibody cdr kabat|chothia|imgt|contact|north`). They
+are independent, so Kabat numbers can sit under Chothia loops. Numbers are
+labeled at every tenth position and at insertion codes (`52A`), thinned
+where labels would overlap; hover any residue for its own. `select cdr h3`
+selects loops by the same definitions ([Selections](SELECTION.md)).
+
+## Layout and saving
+
+Chain and track labels stay pinned at the left while the sequence scrolls
+sideways, and the label column widens to fit the longest one. Turning on
+tracks grows the panel (up to half of its split) so they fit; dragging the
+split afterwards is respected. Residue colors from categorical schemes are
+soft tints of the panel color, with text chosen for WCAG AA contrast in
+both themes; continuous ramps keep their full colors. Color, enabled
+tracks and antibody settings are saved in sessions.
 
 ## Adding a track
 

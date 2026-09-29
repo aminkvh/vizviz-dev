@@ -65,6 +65,26 @@ pub enum Scheme {
     Martin,
 }
 
+impl Scheme {
+    pub const ALL: [Scheme; 4] = [Scheme::Kabat, Scheme::Chothia, Scheme::Imgt, Scheme::Martin];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Scheme::Imgt => "IMGT",
+            Scheme::Kabat => "Kabat",
+            Scheme::Chothia => "Chothia",
+            Scheme::Martin => "Martin",
+        }
+    }
+
+    /// Case-insensitive [`Self::name`].
+    pub fn parse(word: &str) -> Option<Scheme> {
+        Self::ALL
+            .into_iter()
+            .find(|s| s.name().eq_ignore_ascii_case(word))
+    }
+}
+
 /// `(first, last base position on the left of the axis, last)` of each
 /// IMGT CDR loop; shorter or longer loops grow symmetrically around it.
 const IMGT_LOOPS: [(u16, u16, u16); 3] = [(27, 32, 38), (56, 60, 65), (105, 111, 117)];

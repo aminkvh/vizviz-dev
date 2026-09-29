@@ -15,6 +15,33 @@ pub enum CdrDefinition {
     North,
 }
 
+impl CdrDefinition {
+    pub const ALL: [CdrDefinition; 5] = [
+        CdrDefinition::Kabat,
+        CdrDefinition::Chothia,
+        CdrDefinition::Imgt,
+        CdrDefinition::Contact,
+        CdrDefinition::North,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CdrDefinition::Kabat => "Kabat",
+            CdrDefinition::Chothia => "Chothia",
+            CdrDefinition::Imgt => "IMGT",
+            CdrDefinition::Contact => "Contact",
+            CdrDefinition::North => "North",
+        }
+    }
+
+    /// Case-insensitive [`Self::name`].
+    pub fn parse(word: &str) -> Option<CdrDefinition> {
+        Self::ALL
+            .into_iter()
+            .find(|d| d.name().eq_ignore_ascii_case(word))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Region {
     Fr1,
@@ -24,6 +51,30 @@ pub enum Region {
     Fr3,
     Cdr3,
     Fr4,
+}
+
+impl Region {
+    pub fn name(self) -> &'static str {
+        match self {
+            Region::Fr1 => "FR1",
+            Region::Cdr1 => "CDR1",
+            Region::Fr2 => "FR2",
+            Region::Cdr2 => "CDR2",
+            Region::Fr3 => "FR3",
+            Region::Cdr3 => "CDR3",
+            Region::Fr4 => "FR4",
+        }
+    }
+
+    /// 1, 2 or 3 for a CDR, `None` for a framework region.
+    pub fn cdr(self) -> Option<u8> {
+        match self {
+            Region::Cdr1 => Some(1),
+            Region::Cdr2 => Some(2),
+            Region::Cdr3 => Some(3),
+            _ => None,
+        }
+    }
 }
 
 type Range = (Label, Label);

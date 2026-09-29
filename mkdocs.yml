@@ -42,6 +42,7 @@ nav:
       - Commands: COMMANDS.md
       - Selections: SELECTION.md
       - Sequence: SEQUENCE.md
+      - Antibodies: ANTIBODY.md
       - File formats: FORMATS.md
       - Analysis: ANALYSIS.md
       - Rendering: RENDERING.md
