@@ -1,0 +1,10 @@
+vizviz
+Copyright the vizviz authors. Licensed under the Apache License, Version 2.0
+(LICENSE).
+
+This software is based in part on the work of the Independent JPEG Group
+(through the jpeg-encoder crate, used to write JPEG screenshots).
+
+The ProtOr atomic radii (crates/vv-core/src/protor.config) are from
+FreeSASA, MIT License, Copyright (c) 2016 Simon Mitternacht; the full
+notice is at the top of that file.

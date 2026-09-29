@@ -1,0 +1,48 @@
+[package]
+name = "vizviz"
+description = "vizviz desktop application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "vizviz"
+path = "src/main.rs"
+
+[dependencies]
+vv-core = { workspace = true }
+rayon = { workspace = true }
+vv-io = { workspace = true }
+vv-scene = { workspace = true }
+vv-render = { workspace = true }
+wgpu = { workspace = true }
+glam = { workspace = true }
+winit = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+egui-winit = { workspace = true }
+egui_dock = { workspace = true, features = ["serde"] }
+egui-phosphor = "0.14"
+fuzzy-matcher = { workspace = true }
+rfd = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+png = { workspace = true }
+softbuffer = "0.4"
+jpeg-encoder = { workspace = true }
+gif = { workspace = true }
+color_quant = { workspace = true }
+ab_glyph = { workspace = true }
+svg = { workspace = true }
+
+# GUI-subsystem binary that still prints when launched from a shell: see
+# `attach_parent_console` in main.rs.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_System_Console"] }
+
+# The logo as the .exe's icon (Explorer, Start menu, installer shortcuts).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

@@ -1,0 +1,98 @@
+{
+  "adapter": "NVIDIA GeForce RTX 3060 Laptop GPU [Vulkan]",
+  "source": "8GLV.cif",
+  "atoms": 3968189,
+  "bonds": 0,
+  "representation": "Atoms(Spacefill)",
+  "build_ms": null,
+  "width": 1920,
+  "height": 1080,
+  "adaptive": false,
+  "occlusion": true,
+  "results": [
+    {
+      "preset": "overview",
+      "frames": 60,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 4.7002997,
+        "p95": 5.948,
+        "p99": 6.3217998
+      },
+      "gpu_ms": {
+        "p50": 4.229376,
+        "p95": 5.37664,
+        "p99": 5.436288
+      },
+      "cull_ms_p50": 0.30992,
+      "draw_ms_p50": 1.024,
+      "hiz_ms_p50": 0.119936,
+      "visible_quads": 1743952,
+      "visible_points": 1022285,
+      "visible_bonds": 0
+    },
+    {
+      "preset": "mid",
+      "frames": 60,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 7.6622,
+        "p95": 9.724999,
+        "p99": 9.7999
+      },
+      "gpu_ms": {
+        "p50": 6.797952,
+        "p95": 9.0544,
+        "p99": 9.217728
+      },
+      "cull_ms_p50": 0.276192,
+      "draw_ms_p50": 1.796096,
+      "hiz_ms_p50": 0.102239996,
+      "visible_quads": 2853001,
+      "visible_points": 11349,
+      "visible_bonds": 0
+    },
+    {
+      "preset": "close",
+      "frames": 60,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 9.207,
+        "p95": 13.2812,
+        "p99": 15.4055
+      },
+      "gpu_ms": {
+        "p50": 8.591584,
+        "p95": 12.644,
+        "p99": 14.356896
+      },
+      "cull_ms_p50": 0.269664,
+      "draw_ms_p50": 2.163712,
+      "hiz_ms_p50": 0.112192,
+      "visible_quads": 2654121,
+      "visible_points": 14,
+      "visible_bonds": 0
+    },
+    {
+      "preset": "inside",
+      "frames": 60,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 8.4728,
+        "p95": 14.8573,
+        "p99": 16.0343
+      },
+      "gpu_ms": {
+        "p50": 7.732416,
+        "p95": 13.98864,
+        "p99": 15.58176
+      },
+      "cull_ms_p50": 0.249632,
+      "draw_ms_p50": 1.542144,
+      "hiz_ms_p50": 0.129984,
+      "visible_quads": 4844,
+      "visible_points": 0,
+      "visible_bonds": 0
+    }
+  ]
+}

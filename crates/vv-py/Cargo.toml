@@ -1,0 +1,33 @@
+[package]
+name = "vv-py"
+description = "Python bindings for vizviz"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+
+[features]
+default = ["render"]
+# Headless rendering from Python via the CPU backend (no GPU needed, so it
+# works on HPC login nodes and in CI). Pulls in vv-cpu -> vv-render -> wgpu
+# at compile time only; nothing touches a GPU at runtime.
+render = ["dep:vv-cpu", "dep:vv-render", "dep:png"]
+
+[dependencies]
+vv-core = { workspace = true }
+vv-io = { workspace = true }
+vv-scene = { workspace = true }
+vv-cpu = { workspace = true, optional = true }
+vv-render = { workspace = true, optional = true }
+bytemuck = { workspace = true }
+rayon = { workspace = true }
+fixedbitset = { workspace = true }
+png = { workspace = true, optional = true }
+pyo3 = { workspace = true, features = ["extension-module", "abi3-py310"] }
+numpy = { workspace = true }

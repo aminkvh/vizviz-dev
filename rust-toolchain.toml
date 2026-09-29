@@ -1,0 +1,6 @@
+[toolchain]
+# Exact pin: every contributor and CI job builds with the same compiler.
+# Bump deliberately, in its own PR.
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

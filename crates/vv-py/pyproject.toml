@@ -1,0 +1,43 @@
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "vizviz"
+description = "Fast, open molecular visualization and analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = ["numpy>=1.26"]
+dynamic = ["version"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "vizviz._core"
+features = ["pyo3/extension-module"]
+# Stale in-place build artifacts must not end up in wheels.
+exclude = ["python/**/__pycache__/**", "python/**/*.pyd", "python/**/*.so"]
+
+[tool.uv]
+# Rebuild the extension on `uv sync` when any Rust source in the workspace
+# changes, not only when this file does.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "../../Cargo.lock" },
+    { file = "src/**/*.rs" },
+    { file = "../*/src/**/*.rs" },
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.5", "maturin>=1.8,<2.0"]
+# Only for tests/test_interop.py's MDAnalysis round trip (`uv sync --group
+# interop`); vizviz itself never depends on or imports MDAnalysis
+# (docs/ENVIRONMENT.md, license boundary).
+interop = ["MDAnalysis>=2.7"]

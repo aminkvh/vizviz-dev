@@ -1,0 +1,90 @@
+{
+  "adapter": "NVIDIA GeForce RTX 3060 Laptop GPU [Vulkan]",
+  "atoms": 10000000,
+  "width": 1920,
+  "height": 1080,
+  "adaptive": false,
+  "occlusion": false,
+  "results": [
+    {
+      "preset": "overview",
+      "frames": 60,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 26.009699,
+        "p95": 27.2762,
+        "p99": 28.2992
+      },
+      "gpu_ms": {
+        "p50": 25.383776,
+        "p95": 26.827007,
+        "p99": 27.764832
+      },
+      "cull_ms_p50": 0.670784,
+      "draw_ms_p50": 24.612864,
+      "hiz_ms_p50": 0.099744,
+      "visible_quads": 10000000,
+      "visible_points": 0
+    },
+    {
+      "preset": "mid",
+      "frames": 60,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 48.8889,
+        "p95": 50.241,
+        "p99": 50.359303
+      },
+      "gpu_ms": {
+        "p50": 48.159584,
+        "p95": 49.583233,
+        "p99": 49.738335
+      },
+      "cull_ms_p50": 0.655616,
+      "draw_ms_p50": 47.37024,
+      "hiz_ms_p50": 0.134432,
+      "visible_quads": 8364969,
+      "visible_points": 0
+    },
+    {
+      "preset": "close",
+      "frames": 60,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 55.1395,
+        "p95": 56.6901,
+        "p99": 57.2663
+      },
+      "gpu_ms": {
+        "p50": 54.40592,
+        "p95": 55.76016,
+        "p99": 56.22813
+      },
+      "cull_ms_p50": 0.631872,
+      "draw_ms_p50": 53.64224,
+      "hiz_ms_p50": 0.132352,
+      "visible_quads": 5907939,
+      "visible_points": 0
+    },
+    {
+      "preset": "inside",
+      "frames": 60,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 43.444298,
+        "p95": 45.1293,
+        "p99": 45.2756
+      },
+      "gpu_ms": {
+        "p50": 42.734272,
+        "p95": 44.39882,
+        "p99": 44.753983
+      },
+      "cull_ms_p50": 0.59776,
+      "draw_ms_p50": 42.008575,
+      "hiz_ms_p50": 0.130304,
+      "visible_quads": 2370853,
+      "visible_points": 0
+    }
+  ]
+}

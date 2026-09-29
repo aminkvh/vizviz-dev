@@ -1,0 +1,39 @@
+# The docs site: docs/ built with MkDocs Material (mkdocs.yml) and
+# published to GitHub Pages, by hand only until the site goes public.
+# Repository settings > Pages > Source must be "GitHub Actions".
+
+name: Docs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      # MkDocs 2 drops the plugin and theme system Material relies on.
+      - run: uvx --with mkdocs-material --with "mkdocs<2" mkdocs build --strict -d site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

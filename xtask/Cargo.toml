@@ -1,0 +1,19 @@
+[package]
+name = "xtask"
+description = "Repository automation: fixture download, synthetic structures, parse timings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+vv-core = { workspace = true }
+vv-io = { workspace = true }
+ureq = { workspace = true }
+
+# Not a released binary (see dist-workspace.toml).
+[package.metadata.dist]
+dist = false

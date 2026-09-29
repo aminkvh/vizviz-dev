@@ -1,0 +1,67 @@
+# The docs site (GitHub Pages, .github/workflows/docs.yml):
+#   uvx --with mkdocs-material --with "mkdocs<2" mkdocs serve
+site_name: vizviz
+site_description: Fast, open molecular visualization and analysis
+repo_url: https://github.com/aminkvh/vizviz-dev
+edit_uri: edit/main/docs/
+docs_dir: docs
+# NAME.html pages: GALLERY/ would collide with the gallery/ image folder
+# on case-insensitive disks.
+use_directory_urls: false
+
+theme:
+  name: material
+  logo: gallery/logo.png
+  favicon: gallery/logo.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: teal
+      toggle: { icon: material/weather-night, name: Dark }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: teal
+      toggle: { icon: material/weather-sunny, name: Light }
+  features:
+    - navigation.sections
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.superfences
+
+nav:
+  - Home: index.md
+  - Gallery: GALLERY.md
+  - Using vizviz:
+      - Commands: COMMANDS.md
+      - Selections: SELECTION.md
+      - File formats: FORMATS.md
+      - Analysis: ANALYSIS.md
+      - Rendering: RENDERING.md
+      - Movies: MOVIE.md
+  - Scripting:
+      - Python: PYTHON.md
+      - Driving the app (Python, MCP): LIVE.md
+      - Versioning: VERSIONING.md
+  - Running it:
+      - Environments: ENVIRONMENT.md
+      - HPC: HPC.md
+      - Containers: CONTAINERS.md
+  - Development:
+      - Releasing: RELEASING.md
+      - Validation: VALIDATION.md
+      - UI design: UI_DESIGN.md
+      - UX patterns: UX_PATTERNS.md
+      - Van der Waals radii: RADII_RESEARCH.md
+
+# Pages link up to ROADMAP.md, benchmarks/ and sources outside docs/:
+# fine on GitHub, not pages of the site.
+validation:
+  links:
+    not_found: info

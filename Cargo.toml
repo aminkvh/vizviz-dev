@@ -1,0 +1,102 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vv-core",
+    "crates/vv-io",
+    "crates/vv-scene",
+    "crates/vv-render",
+    "crates/vv-cpu",
+    "crates/vv-app",
+    "crates/vv-bench",
+    "crates/vv-dssp",
+    "crates/vv-py",
+    "xtask",
+]
+# vv-py is built with maturin (needs a Python), not plain `cargo build`.
+default-members = [
+    "crates/vv-core",
+    "crates/vv-io",
+    "crates/vv-scene",
+    "crates/vv-render",
+    "crates/vv-cpu",
+    "crates/vv-app",
+    "crates/vv-bench",
+    "crates/vv-dssp",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+authors = ["Amin Akbari Ahangar"]
+# The name is final; the GitHub repository does not exist yet (docs/RELEASING.md).
+repository = "https://github.com/aminkvh/vizviz-dev"
+
+[workspace.dependencies]
+# Internal crates
+vv-core = { path = "crates/vv-core", version = "0.2.0" }
+vv-io = { path = "crates/vv-io", version = "0.2.0" }
+vv-scene = { path = "crates/vv-scene", version = "0.2.0" }
+vv-render = { path = "crates/vv-render", version = "0.2.0" }
+vv-cpu = { path = "crates/vv-cpu", version = "0.2.0" }
+
+# GPU / windowing / UI — upgrade this cluster together, one PR per egui release.
+wgpu = "30"
+winit = "0.30"
+egui = "0.36"
+egui-wgpu = "0.36"
+egui-winit = "0.36"
+egui_dock = "0.21"
+pollster = "0.4"
+# Native file dialogs. No GTK: the XDG portal backend is pure Rust, so a
+# Linux CI runner without GTK dev headers still builds; Windows/macOS use
+# their own APIs regardless.
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal", "pollster", "common-controls-v6"] }
+
+# Math / memory
+glam = { version = "0.30", features = ["bytemuck"] }
+bytemuck = { version = "1", features = ["derive"] }
+fixedbitset = "0.5"
+
+# Parallelism / IO
+rayon = "1"
+memmap2 = "0.9"
+memchr = "2"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+
+# Data / errors
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+fuzzy-matcher = "0.3"
+png = "0.17"
+jpeg-encoder = "0.7"
+gif = { version = "0.14", default-features = false, features = ["std"] }
+color_quant = "1.1"
+ab_glyph = "0.2"
+svg = "0.18"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+# Python
+pyo3 = "0.29"
+numpy = "0.29"
+
+# Dev
+criterion = "0.5"
+insta = "1"
+proptest = "1"
+
+[profile.release]
+debug = 1
+lto = "thin"
+codegen-units = 4
+
+[profile.bench]
+inherits = "release"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

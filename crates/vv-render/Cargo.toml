@@ -1,0 +1,23 @@
+[package]
+name = "vv-render"
+description = "wgpu renderer: paged GPU buffers, culling, impostor spheres/cylinders, picking"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+vv-core = { workspace = true }
+wgpu = { workspace = true }
+pollster = { workspace = true }
+glam = { workspace = true }
+bytemuck = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+vv-io = { workspace = true }
+vv-core = { workspace = true }
+png = { workspace = true }

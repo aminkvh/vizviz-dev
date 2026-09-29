@@ -1,0 +1,102 @@
+{
+  "adapter": "AMD Radeon(TM) Graphics [Vulkan]",
+  "source": "8GLV.cif",
+  "atoms": 3968189,
+  "bonds": 0,
+  "representation": "Atoms(Spacefill)",
+  "build_ms": null,
+  "width": 1920,
+  "height": 1080,
+  "adaptive": false,
+  "occlusion": true,
+  "results": [
+    {
+      "preset": "overview",
+      "frames": 120,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 15.2675,
+        "p95": 16.7016,
+        "p99": 17.641901
+      },
+      "gpu_ms": {
+        "p50": 14.39684,
+        "p95": 15.65232,
+        "p99": 16.00256
+      },
+      "cull_ms_p50": 1.6816,
+      "draw_ms_p50": 2.47768,
+      "hiz_ms_p50": 0.69832,
+      "post_ms_p50": 1.24528,
+      "visible_quads": 1650070,
+      "visible_points": 1136105,
+      "visible_bonds": 0
+    },
+    {
+      "preset": "mid",
+      "frames": 120,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 21.957901,
+        "p95": 25.9965,
+        "p99": 26.9846
+      },
+      "gpu_ms": {
+        "p50": 21.052639,
+        "p95": 24.97116,
+        "p99": 25.62176
+      },
+      "cull_ms_p50": 1.50824,
+      "draw_ms_p50": 3.94968,
+      "hiz_ms_p50": 0.75276,
+      "post_ms_p50": 2.39952,
+      "visible_quads": 2693743,
+      "visible_points": 56950,
+      "visible_bonds": 0
+    },
+    {
+      "preset": "close",
+      "frames": 120,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 23.129599,
+        "p95": 28.3109,
+        "p99": 30.407701
+      },
+      "gpu_ms": {
+        "p50": 22.11388,
+        "p95": 26.86684,
+        "p99": 28.82452
+      },
+      "cull_ms_p50": 1.145,
+      "draw_ms_p50": 4.5257998,
+      "hiz_ms_p50": 0.7908,
+      "post_ms_p50": 3.3284,
+      "visible_quads": 1887337,
+      "visible_points": 75,
+      "visible_bonds": 0
+    },
+    {
+      "preset": "inside",
+      "frames": 120,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 15.835,
+        "p95": 21.782501,
+        "p99": 30.3503
+      },
+      "gpu_ms": {
+        "p50": 15.06188,
+        "p95": 21.14188,
+        "p99": 29.6906
+      },
+      "cull_ms_p50": 0.47428,
+      "draw_ms_p50": 3.74188,
+      "hiz_ms_p50": 0.83672,
+      "post_ms_p50": 4.20028,
+      "visible_quads": 55477,
+      "visible_points": 0,
+      "visible_bonds": 0
+    }
+  ]
+}

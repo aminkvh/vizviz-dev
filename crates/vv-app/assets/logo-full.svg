@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254" width="1254" height="1254" xmlns:c2pa="http://c2pa.org/manifest">
+  <defs>
+    <!-- Speed lines -->
+    <linearGradient id="speed1" x1="300" y1="0" x2="495" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2F7BF5" stop-opacity="0"/>
+      <stop offset="1" stop-color="#1F6CF2"/>
+    </linearGradient>
+    <linearGradient id="speed2" x1="220" y1="0" x2="455" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3A86F7" stop-opacity="0"/>
+      <stop offset="1" stop-color="#2A74F3"/>
+    </linearGradient>
+    <linearGradient id="speed3" x1="300" y1="0" x2="495" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8E7BF7" stop-opacity="0"/>
+      <stop offset="1" stop-color="#7B5CF5"/>
+    </linearGradient>
+
+    <!-- Wings -->
+    <linearGradient id="wingTop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#C8DAFC" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#4F7FF0" stop-opacity="0.85"/>
+    </linearGradient>
+    <linearGradient id="wingTopInner" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9FBDF9" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#4474EE" stop-opacity="0.6"/>
+    </linearGradient>
+    <linearGradient id="wingBottom" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#D8DCFB" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#5A86F2" stop-opacity="0.85"/>
+    </linearGradient>
+    <linearGradient id="wingBottomInner" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#A7B6F7" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#4B78EF" stop-opacity="0.6"/>
+    </linearGradient>
+
+    <!-- Atoms -->
+    <radialGradient id="atomCenter" cx="0.68" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#4FE3C8"/>
+      <stop offset="0.3" stop-color="#1B6C8C"/>
+      <stop offset="0.75" stop-color="#123A63"/>
+      <stop offset="1" stop-color="#0E2442"/>
+    </radialGradient>
+    <radialGradient id="atomLeft" cx="0.62" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#3C8CF0"/>
+      <stop offset="0.5" stop-color="#1A4E9E"/>
+      <stop offset="1" stop-color="#112B57"/>
+    </radialGradient>
+    <radialGradient id="atomTop" cx="0.62" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#6FF5D9"/>
+      <stop offset="0.45" stop-color="#26B8B2"/>
+      <stop offset="1" stop-color="#1A5F8F"/>
+    </radialGradient>
+    <radialGradient id="atomRight" cx="0.62" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#5CB2FF"/>
+      <stop offset="0.45" stop-color="#1678F2"/>
+      <stop offset="1" stop-color="#0B3FA8"/>
+    </radialGradient>
+    <radialGradient id="atomBottom" cx="0.62" cy="0.3" r="0.8">
+      <stop offset="0" stop-color="#C8A8FF"/>
+      <stop offset="0.45" stop-color="#8A5CF6"/>
+      <stop offset="1" stop-color="#4B33B8"/>
+    </radialGradient>
+
+    <!-- Wordmark -->
+    <linearGradient id="z1" x1="453" y1="968" x2="620" y2="812" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0A5FEA"/>
+      <stop offset="1" stop-color="#22A8F7"/>
+    </linearGradient>
+    <linearGradient id="z2" x1="903" y1="968" x2="1085" y2="812" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3D4FDF"/>
+      <stop offset="1" stop-color="#A874F7"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1254" height="1254" fill="#FFFFFF"/>
+
+  <!-- Speed lines -->
+  <g stroke-linecap="round" stroke-width="15">
+    <line x1="300" y1="491" x2="490" y2="491" stroke="url(#speed1)"/>
+    <line x1="220" y1="528" x2="450" y2="528" stroke="url(#speed2)"/>
+    <line x1="300" y1="565" x2="490" y2="565" stroke="url(#speed3)"/>
+  </g>
+
+  <!-- Wings -->
+  <ellipse cx="578" cy="385" rx="170" ry="92" transform="rotate(33 578 385)" fill="url(#wingTop)"/>
+  <ellipse cx="592" cy="425" rx="145" ry="72" transform="rotate(30 592 425)" fill="url(#wingTopInner)"/>
+  <ellipse cx="600" cy="626" rx="142" ry="68" transform="rotate(-42 600 626)" fill="url(#wingBottom)"/>
+  <ellipse cx="628" cy="618" rx="112" ry="52" transform="rotate(-45 628 618)" fill="url(#wingBottomInner)"/>
+
+  <!-- Bonds -->
+  <g stroke="#13294B" stroke-width="16" stroke-linecap="round" fill="none">
+    <path d="M565 520 Q640 516 700 510"/>
+    <path d="M760 470 L825 380"/>
+    <path d="M800 510 Q880 516 945 530"/>
+    <path d="M780 560 L825 650"/>
+  </g>
+
+  <!-- Atoms -->
+  <circle cx="557" cy="520" r="38" fill="url(#atomLeft)"/>
+  <circle cx="833" cy="364" r="47" fill="url(#atomTop)"/>
+  <circle cx="950" cy="532" r="50" fill="url(#atomRight)"/>
+  <circle cx="832" cy="670" r="47" fill="url(#atomBottom)"/>
+  <circle cx="755" cy="518" r="78" fill="url(#atomCenter)"/>
+
+  <!-- Wordmark: vizviz -->
+  <g stroke-linecap="round" stroke-linejoin="round" fill="none" stroke-width="50">
+    <!-- v -->
+    <polyline points="194,838 273,944 352,838" stroke="#111C2E"/>
+    <!-- z -->
+    <polyline points="480,837 588,837 480,943 594,943" stroke="url(#z1)"/>
+    <!-- v -->
+    <polyline points="644,838 723,944 802,838" stroke="#111C2E"/>
+    <!-- z -->
+    <polyline points="930,837 1052,837 930,943 1058,943" stroke="url(#z2)"/>
+  </g>
+  <!-- i stems and dots -->
+  <g fill="#111C2E">
+    <rect x="390" y="812" width="47" height="156" rx="12"/>
+    <circle cx="413" cy="760" r="27"/>
+    <rect x="842" y="812" width="47" height="156" rx="12"/>
+    <circle cx="865" cy="760" r="27"/>
+  </g>
+</svg>

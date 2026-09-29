@@ -1,0 +1,22 @@
+[package]
+name = "vv-cpu"
+description = "Brute-force CPU sphere-impostor renderer: no GPU required, for HPC/headless machines without one"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+vv-core = { workspace = true }
+# Reused, not duplicated, so the CPU and GPU backends render the same
+# colors and camera geometry: Camera's trig math, and color::{by_element,
+# by_chain, by_b_factor} + ColorScheme/StylePreset. See docs/RENDERING.md.
+vv-render = { workspace = true }
+glam = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+vv-io = { workspace = true }
+png = { workspace = true }

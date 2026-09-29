@@ -1,0 +1,23 @@
+[package]
+name = "encoder-spike"
+description = "Throwaway harness for docs/MOVIE_ENCODER_SPIKE.md: H.264 (openh264) and AV1 (rav1e) against PNG frames"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+# Its own workspace: the encoders are heavy and must not enter the
+# apps dependency graph or the cargo deny run.
+[workspace]
+
+[features]
+default = ["source"]
+source = ["openh264/source"]
+libloading = ["openh264/libloading"]
+
+[dependencies]
+png = "0.17"
+mp4 = "0.14"
+openh264 = { version = "0.9", default-features = false }
+rav1e = { version = "0.8", default-features = false, features = ["asm", "threading"] }
+gif = "0.14"

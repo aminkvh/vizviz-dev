@@ -1,0 +1,26 @@
+[package]
+name = "vv-io"
+description = "File-format readers and writers (mmCIF, PDB, XYZ, PQR, GRO) and synthetic structure generation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+default = ["fetch"]
+# Download entries from RCSB (`vv_io::fetch`); pulls in ureq + rustls.
+fetch = ["dep:ureq"]
+
+[dependencies]
+vv-core = { workspace = true }
+memmap2 = { workspace = true }
+ureq = { workspace = true, optional = true }
+memchr = { workspace = true }
+flate2 = { workspace = true }
+rayon = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

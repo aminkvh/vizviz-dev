@@ -1,0 +1,25 @@
+# cargo-dist: single-binary releases of `vizviz` for each OS, built by a
+# GitHub Actions workflow on a `v*` tag. Written by `dist init` and
+# trimmed by hand.
+#
+# `.github/workflows/release.yml` is generated from this by `dist generate`;
+# re-run that after editing here (docs/RELEASING.md).
+
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.32.0"
+ci = "github"
+installers = ["shell", "powershell"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+install-path = "CARGO_HOME"
+hosting = "github"
+install-updater = false
+# The licence acknowledgments (Independent JPEG Group, FreeSASA radii).
+include = ["NOTICE"]

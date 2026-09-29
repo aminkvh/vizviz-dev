@@ -1,0 +1,25 @@
+[package]
+name = "vv-bench"
+description = "Headless frame-time benchmark harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "vv-bench"
+path = "src/main.rs"
+
+# A developer tool, not something releases ship (see dist-workspace.toml).
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+vv-core = { workspace = true }
+vv-io = { workspace = true }
+vv-render = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+png = { workspace = true }

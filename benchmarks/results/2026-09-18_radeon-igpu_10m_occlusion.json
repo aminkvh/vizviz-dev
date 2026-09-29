@@ -1,0 +1,90 @@
+{
+  "adapter": "AMD Radeon(TM) Graphics [Vulkan]",
+  "atoms": 10000000,
+  "width": 1920,
+  "height": 1080,
+  "adaptive": false,
+  "occlusion": true,
+  "results": [
+    {
+      "preset": "overview",
+      "frames": 40,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 27.851799,
+        "p95": 29.6179,
+        "p99": 29.7442
+      },
+      "gpu_ms": {
+        "p50": 27.560442,
+        "p95": 28.91516,
+        "p99": 29.0724
+      },
+      "cull_ms_p50": 5.59056,
+      "draw_ms_p50": 21.0804,
+      "hiz_ms_p50": 0.7924,
+      "visible_quads": 3031602,
+      "visible_points": 0
+    },
+    {
+      "preset": "mid",
+      "frames": 40,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 36.680798,
+        "p95": 38.457798,
+        "p99": 39.345802
+      },
+      "gpu_ms": {
+        "p50": 35.68208,
+        "p95": 37.40104,
+        "p99": 38.59008
+      },
+      "cull_ms_p50": 4.99288,
+      "draw_ms_p50": 29.7392,
+      "hiz_ms_p50": 0.85576,
+      "visible_quads": 1788251,
+      "visible_points": 0
+    },
+    {
+      "preset": "close",
+      "frames": 40,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 29.259,
+        "p95": 34.9511,
+        "p99": 41.2428
+      },
+      "gpu_ms": {
+        "p50": 28.391119,
+        "p95": 34.28864,
+        "p99": 40.50156
+      },
+      "cull_ms_p50": 4.71368,
+      "draw_ms_p50": 22.95728,
+      "hiz_ms_p50": 0.8566,
+      "visible_quads": 1066571,
+      "visible_points": 0
+    },
+    {
+      "preset": "inside",
+      "frames": 40,
+      "threshold_px": 1.0,
+      "cpu_ms": {
+        "p50": 13.7297,
+        "p95": 68.5008,
+        "p99": 96.918594
+      },
+      "gpu_ms": {
+        "p50": 13.070959,
+        "p95": 67.47,
+        "p99": 95.9832
+      },
+      "cull_ms_p50": 4.3818,
+      "draw_ms_p50": 7.87364,
+      "hiz_ms_p50": 0.85724,
+      "visible_quads": 68105,
+      "visible_points": 0
+    }
+  ]
+}

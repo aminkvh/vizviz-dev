@@ -1,0 +1,48 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+wheels/
+.pytest_cache/
+.ruff_cache/
+
+# Fixtures that are downloaded or generated, never committed
+/fixtures/large/
+/fixtures/synth/
+
+# Benchmarks: keep results, not raw traces
+/benchmarks/traces/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Snapshot review files
+*.snap.new
+
+# Per-user panel layout (docs/UI_DESIGN.md); not shared state
+/vizviz_layout.json
+
+# Locally built wheels (README install instructions)
+/dist/
+
+# MSVC debug symbols from `maturin develop` (not a Protein Data Bank file)
+/crates/vv-py/python/vizviz/*.pdb
+
+# MDAnalysis offset caches (fixtures/traj/make.py)
+*_offsets.npz
+
+# Raw CCD downloads gen_templates.py caches so reruns don't re-fetch
+/crates/vv-core/src/bonds/ccd_cache/
+
+# Real entries downloaded for the format audit
+/fixtures/real/
