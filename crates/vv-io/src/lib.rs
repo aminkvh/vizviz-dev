@@ -33,6 +33,7 @@ mod polymer_layout;
 pub mod pqr_write;
 pub mod prmtop;
 pub mod psf;
+pub mod seqdata;
 mod ss_range;
 pub mod synth;
 pub mod trajectory;

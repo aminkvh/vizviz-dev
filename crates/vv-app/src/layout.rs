@@ -103,7 +103,7 @@ pub fn default_layout() -> DockState<Tab> {
 }
 
 /// Most of its split the Sequence panel may claim to fit its tracks.
-const SEQUENCE_MAX_FRACTION: f32 = 0.5;
+const SEQUENCE_MAX_FRACTION: f32 = 0.7;
 
 /// Makes the Sequence panel `px` taller by moving its split, if it sits
 /// above the viewport (the top child of a vertical split).

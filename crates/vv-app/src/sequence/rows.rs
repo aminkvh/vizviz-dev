@@ -2,30 +2,135 @@
 //! name, and the one-letter sequence of a row.
 
 use std::ops::Range;
+use std::sync::Arc;
 
 use vv_core::residue_class::ResidueClass;
 pub use vv_core::seqfeat::one_letter;
 use vv_core::Topology;
-use vv_scene::{Scene, StructureId};
+use vv_scene::{LoadedStructure, Scene, StructureId};
 
+/// The non-polymer molecules of one name in a structure.
+pub struct LigandGroup {
+    pub name: String,
+    pub residues: Vec<u32>,
+}
+
+impl LigandGroup {
+    pub fn text(&self) -> String {
+        match self.residues.len() {
+            1 => self.name.clone(),
+            n => format!("{} \u{D7}{n}", self.name),
+        }
+    }
+
+    /// Columns the group's chip takes, with a column of space after it.
+    fn columns(&self) -> usize {
+        self.text().chars().count() + 1
+    }
+}
+
+/// One line of the strip: a polymer chain's sequence, or (`ligands` not
+/// empty, `residues` empty) the summary of a structure's non-polymer
+/// molecules.
 pub struct Row {
     pub structure: StructureId,
     pub label: String,
     pub residues: Range<u32>,
+    pub ligands: Arc<Vec<LigandGroup>>,
 }
 
-pub fn rows_of(scene: &Scene) -> Vec<Row> {
+impl Row {
+    /// Width in columns.
+    pub fn columns(&self) -> usize {
+        if self.ligands.is_empty() {
+            self.residues.len()
+        } else {
+            self.ligands.iter().map(LigandGroup::columns).sum()
+        }
+    }
+
+    /// Index of the group whose chip covers `column`.
+    pub fn ligand_at(&self, column: usize) -> Option<usize> {
+        let mut start = 0;
+        self.ligands.iter().position(|g| {
+            let end = start + g.columns();
+            let hit = (start..end - 1).contains(&column);
+            start = end;
+            hit
+        })
+    }
+
+    /// First column of each group's chip.
+    pub fn ligand_starts(&self) -> Vec<usize> {
+        let mut at = 0;
+        self.ligands
+            .iter()
+            .map(|g| {
+                let start = at;
+                at += g.columns();
+                start
+            })
+            .collect()
+    }
+}
+
+/// A row per polymer chain of every structure, then a summary row of its
+/// ligands, sugars and ions; water is left out.
+pub fn rows_of(
+    scene: &Scene,
+    mut ligands_of: impl FnMut(StructureId, &LoadedStructure) -> Arc<Vec<LigandGroup>>,
+) -> Vec<Row> {
     let mut rows = Vec::new();
     for (id, loaded) in scene.structures() {
-        for (name, residues) in chain_rows(&loaded.structure.topology) {
+        let top = &loaded.structure.topology;
+        for (name, residues) in chain_rows(top) {
+            if is_polymer(top, residues.start) {
+                rows.push(Row {
+                    structure: id,
+                    label: format!("{} {name}", loaded.label),
+                    residues,
+                    ligands: Arc::default(),
+                });
+            }
+        }
+        let ligands = ligands_of(id, loaded);
+        if !ligands.is_empty() {
             rows.push(Row {
                 structure: id,
-                label: format!("{} {name}", loaded.label),
-                residues,
+                label: format!("{} ligands", loaded.label),
+                residues: 0..0,
+                ligands,
             });
         }
     }
     rows
+}
+
+/// Non-polymer, non-water residues grouped by name, in order of first
+/// appearance.
+pub fn ligand_groups(top: &Topology) -> Vec<LigandGroup> {
+    let mut groups: Vec<LigandGroup> = Vec::new();
+    for r in 0..top.residue_count() {
+        let shown = !matches!(
+            top.residue_class(r),
+            ResidueClass::Protein
+                | ResidueClass::Nucleic
+                | ResidueClass::Water
+                | ResidueClass::Other
+        );
+        if !shown {
+            continue;
+        }
+        let name = top.residue_name(r);
+        match groups.iter_mut().find(|g| g.name == name) {
+            Some(g) => g.residues.push(r as u32),
+            None => groups.push(LigandGroup {
+                name: name.to_string(),
+                residues: vec![r as u32],
+            }),
+        }
+    }
+    groups
 }
 
 /// One `(chain name, residues)` row per chain name. A PDB `TER` splits a

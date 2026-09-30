@@ -7,15 +7,18 @@ use egui::{vec2, Sense, Ui};
 use vv_core::antibody::{CdrDefinition, Scheme};
 use vv_scene::Scene;
 
+use super::cache::Fetch;
 use super::color::{from_packed, SCHEMES};
 use super::tracks::{Glyph, TrackData, PROVIDERS};
 use super::SequenceState;
 use crate::widgets;
 
 pub fn show(ui: &mut Ui, state: &mut SequenceState, scene: &Scene) {
+    state.cache.set_wake(ui.ctx());
     ui.horizontal_wrapped(|ui| {
         color_choice(ui, state);
         tracks_menu(ui, state);
+        uniprot_toggle(ui, state, scene);
         if state.track_on("antibody") {
             antibody_choices(ui, state);
         }
@@ -33,6 +36,44 @@ fn color_choice(ui: &mut Ui, state: &mut SequenceState) {
     let current = SCHEMES.iter().position(|s| s.0 == state.color);
     if let Some(i) = widgets::select(ui, "sequence-color", &labels, current, "None") {
         state.color = SCHEMES[i].0;
+    }
+}
+
+/// The UniProt switch, with how the fetch is going while it is on.
+fn uniprot_toggle(ui: &mut Ui, state: &mut SequenceState, scene: &Scene) {
+    let mut on = state.track_on("uniprot");
+    let hint = "Draw UniProt features (domains, sites, modifications, variants) on each chain. Fetches from the network and keeps what it fetched.";
+    if ui
+        .checkbox(&mut on, "UniProt")
+        .on_hover_text(hint)
+        .changed()
+    {
+        state.set_track("uniprot", on);
+    }
+    if !on {
+        return;
+    }
+    let mut variants = state.track_on("variants");
+    let hint = "Also draw UniProt's natural variants as their own row.";
+    if ui
+        .checkbox(&mut variants, "variants")
+        .on_hover_text(hint)
+        .changed()
+    {
+        state.set_track("variants", variants);
+    }
+    let (mut pending, mut ready) = (false, false);
+    for (id, loaded) in scene.structures() {
+        match state.cache.uniprot_status(id, loaded) {
+            Fetch::Pending => pending = true,
+            Fetch::Ready(_) => ready = true,
+            Fetch::Unavailable => {}
+        }
+    }
+    if pending {
+        ui.weak("fetching\u{2026}");
+    } else if !ready {
+        ui.weak("not available (offline, or no UniProt entry)");
     }
 }
 
@@ -80,10 +121,13 @@ fn key_rows(state: &mut SequenceState, scene: &Scene) -> Vec<(&'static str, Arc<
         .iter()
         .filter(|p| state.track_on(p.id()))
         .collect();
+    let env = state
+        .cache
+        .env(scene, state.antibody, state.track_on("conservation"));
     let mut rows = Vec::new();
     for provider in enabled {
         let data = scene.structures().find_map(|(id, loaded)| {
-            let data = state.cache.track(id, loaded, *provider, state.antibody);
+            let data = state.cache.track(id, loaded, *provider, &env);
             let all = 0..loaded.structure.topology.residue_count() as u32;
             data.any_in(&all).then_some(data)
         });

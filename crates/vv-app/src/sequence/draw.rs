@@ -47,6 +47,11 @@ pub fn block(
     selected: Option<&[bool]>,
     columns: Range<usize>,
 ) {
+    if !b.row.ligands.is_empty() {
+        ligand_chips(p, b, selected, &columns);
+        labels(p, b);
+        return;
+    }
     for column in columns.start..columns.end.min(b.row.residues.len()) {
         let residue = b.row.residues.start as usize + column;
         let cell = p.cell(b, column, 0.0, p.row_h);
@@ -70,6 +75,34 @@ pub fn block(
         badges(p, b, line);
     }
     labels(p, b);
+}
+
+/// One clickable chip per ligand name; lit while all its residues are
+/// selected.
+fn ligand_chips(p: &Paint, b: &Block, selected: Option<&[bool]>, columns: &Range<usize>) {
+    for (group, start) in b.row.ligands.iter().zip(b.row.ligand_starts()) {
+        let width = group.text().chars().count();
+        if start + width <= columns.start || start >= columns.end {
+            continue;
+        }
+        let cell = p.cell(b, start, 0.0, p.row_h);
+        let chip = Rect::from_min_size(cell.min, vec2(width as f32 * p.advance, p.row_h))
+            .shrink2(vec2(1.0, 2.0));
+        let lit = selected.is_some_and(|s| group.residues.iter().all(|&r| s[r as usize]));
+        let fill = if lit {
+            p.highlight
+        } else {
+            p.dim.gamma_multiply(0.18)
+        };
+        p.painter.rect_filled(chip, 3.0, fill);
+        p.painter.text(
+            pos2(chip.left() + 4.0, chip.center().y),
+            Align2::LEFT_CENTER,
+            group.text(),
+            p.font.clone(),
+            p.text,
+        );
+    }
 }
 
 /// The label column over the letters, so it stays put while they scroll.

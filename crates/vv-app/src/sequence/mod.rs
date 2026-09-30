@@ -11,17 +11,23 @@
 //! (`header.rs`) chooses both and `sequence ...` commands (`command.rs`)
 //! do the same.
 
+mod background;
 mod cache;
+mod chain_props;
+#[cfg(test)]
+mod checks;
 mod color;
 mod command;
 mod draw;
 mod header;
 mod layout;
+mod peers;
 mod prefs;
 mod providers;
 mod rows;
 mod tooltip;
 mod tracks;
+mod uniprot;
 
 use egui::{Sense, Ui};
 use vv_scene::{Scene, StructureId};
@@ -34,7 +40,7 @@ use tracks::AntibodySettings;
 const MIN_LABEL_WIDTH: f32 = 96.0;
 /// Panel height beyond the strip that a fit leaves free, for the
 /// horizontal scroll bar.
-const FIT_SLACK: f32 = 16.0;
+const FIT_SLACK: f32 = 20.0;
 
 /// What the strip shows, and what it has computed for it.
 pub struct SequenceState {
@@ -43,8 +49,8 @@ pub struct SequenceState {
     pub tracks: Vec<&'static str>,
     pub legend: bool,
     pub antibody: AntibodySettings,
-    /// Strip height the panel was last fitted to.
-    fitted: Option<i32>,
+    /// Strip height and free space the panel was last fitted at.
+    fitted: Option<(i32, i32)>,
     cache: cache::Cache,
 }
 
@@ -99,11 +105,30 @@ fn label_width(
     wide
 }
 
-/// A click on the strip: the residue, and whether it adds to the selection.
+/// A click on the strip: the residues it selects (one, or every residue
+/// of a ligand chip), and whether they add to the selection.
 struct Pick {
     structure: StructureId,
-    residue: u32,
+    residues: Vec<u32>,
     add: bool,
+}
+
+/// The structure and residues a click on `target` acts on: one residue,
+/// or all of a ligand chip's.
+fn clicked_residues(
+    blocks: &[layout::Block],
+    target: layout::Hit,
+) -> Option<(StructureId, Vec<u32>)> {
+    match target {
+        layout::Hit::Residue { block, residue } => {
+            Some((blocks[block].row.structure, vec![residue]))
+        }
+        layout::Hit::Ligands { block, group } => {
+            let row = &blocks[block].row;
+            Some((row.structure, row.ligands[group].residues.clone()))
+        }
+        layout::Hit::Label { .. } => None,
+    }
 }
 
 impl AppUi<'_> {
@@ -132,29 +157,24 @@ impl AppUi<'_> {
         small.size *= 0.85;
         let advance = ui.ctx().fonts_mut(|f| f.glyph_width(&font, 'W')) + 2.0;
         let row_h = ui.text_style_height(&egui::TextStyle::Monospace) + 6.0;
-        let blocks = layout::blocks(
-            scene,
-            &mut state.cache,
-            &state.tracks,
-            state.antibody,
-            row_h,
-        );
-        let longest = blocks
-            .iter()
-            .map(|b| b.row.residues.len())
-            .max()
-            .unwrap_or(0);
+        state.cache.set_wake(ui.ctx());
+        let env = state
+            .cache
+            .env(scene, state.antibody, state.track_on("conservation"));
+        let blocks = layout::blocks(scene, &mut state.cache, &state.tracks, &env, row_h);
+        let longest = blocks.iter().map(|b| b.row.columns()).max().unwrap_or(0);
         let height = blocks.last().map_or(0.0, |b| b.top + b.height);
         let label_width = label_width(ui, &blocks, &font, &small);
         let total = egui::vec2(label_width + longest as f32 * advance, height);
-        let shortfall = height - ui.available_height();
-        if shortfall > 0.0 && state.fitted != Some(height as i32) {
-            state.fitted = Some(height as i32);
-            *self.layout_request = Some(LayoutRequest::GrowSequence(shortfall + FIT_SLACK));
+        let shortfall = height + FIT_SLACK - ui.available_height();
+        let seen = (height as i32, ui.available_height() as i32);
+        if shortfall > 0.0 && state.fitted != Some(seen) {
+            state.fitted = Some(seen);
+            *self.layout_request = Some(LayoutRequest::GrowSequence(shortfall));
         }
         let selected = rows::selected_residues(scene);
         let mut chips = std::collections::HashMap::new();
-        for b in &blocks {
+        for b in blocks.iter().filter(|b| b.row.ligands.is_empty()) {
             let id = b.row.structure;
             if let (None, Some(loaded)) = (chips.get(&id), scene.structure(id)) {
                 chips.insert(id, state.cache.colors(id, loaded, state.color));
@@ -211,32 +231,41 @@ impl AppUi<'_> {
                     );
                 }
 
-                let hit = |pos: egui::Pos2| -> Option<(usize, usize)> {
-                    let local = pos - rect.min;
-                    if local.x < label_width {
-                        return None;
-                    }
-                    let i = layout::block_at(&blocks, local.y)?;
-                    let column = ((local.x - label_width) / advance).floor() as usize;
-                    (column < blocks[i].row.residues.len()).then_some((i, column))
+                let cols = layout::Columns {
+                    label_width,
+                    label_left: viewport.min.x,
+                    advance,
+                    row_h,
                 };
-                if let Some((i, column)) = response.hover_pos().and_then(hit) {
-                    let b = &blocks[i];
-                    let residue = b.row.residues.start + column as u32;
-                    tooltip::show(&response, scene, &state.cache, b, residue);
+                let hit = |pos: egui::Pos2| layout::hit(&blocks, pos - rect.min, &cols);
+                match response.hover_pos().and_then(hit) {
+                    Some(layout::Hit::Residue { block, residue }) => tooltip::residue(
+                        &response,
+                        scene,
+                        &mut state.cache,
+                        &blocks[block],
+                        residue,
+                    ),
+                    Some(layout::Hit::Label { block }) => {
+                        tooltip::chain(&response, scene, &blocks[block])
+                    }
+                    Some(layout::Hit::Ligands { block, group }) => {
+                        tooltip::ligands(&response, scene, &blocks[block], group)
+                    }
+                    None => {}
                 }
-                if let Some((i, column)) = response.interact_pointer_pos().and_then(hit) {
-                    let structure = blocks[i].row.structure;
-                    let residue = blocks[i].row.residues.start + column as u32;
-                    if response.double_clicked() {
-                        focused = Some((structure, residue));
-                    } else if response.clicked() {
-                        let add = ui.input(|i| i.modifiers.command);
-                        picked = Some(Pick {
-                            structure,
-                            residue,
-                            add,
-                        });
+                if let Some(target) = response.interact_pointer_pos().and_then(hit) {
+                    if let Some((structure, residues)) = clicked_residues(&blocks, target) {
+                        if response.double_clicked() {
+                            focused = Some((structure, residues[0]));
+                        } else if response.clicked() {
+                            let add = ui.input(|i| i.modifiers.command);
+                            picked = Some(Pick {
+                                structure,
+                                residues,
+                                add,
+                            });
+                        }
                     }
                 }
             });
@@ -245,9 +274,10 @@ impl AppUi<'_> {
 
     fn select_residue(&mut self, pick: Pick) {
         let atoms: Option<Vec<u32>> = self.scene.structure(pick.structure).map(|s| {
-            s.structure.topology.residues[pick.residue as usize]
-                .atoms
-                .clone()
+            let top = &s.structure.topology;
+            pick.residues
+                .iter()
+                .flat_map(|&r| top.residues[r as usize].atoms.clone())
                 .collect()
         });
         if let Some(atoms) = atoms {

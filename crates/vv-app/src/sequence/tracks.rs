@@ -3,12 +3,16 @@
 //! computed once per structure (again per frame for geometry-dependent
 //! ones) and cached (`cache.rs`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 
 use vv_core::antibody::{CdrDefinition, Scheme};
 use vv_core::glam::Vec3;
-use vv_scene::LoadedStructure;
+use vv_core::seqfeat::EntityChain;
+use vv_scene::{LoadedStructure, StructureId};
+
+use super::peers::Peers;
+use super::uniprot;
 
 /// How a track's marks are painted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,6 +152,34 @@ impl TrackData {
     }
 }
 
+/// Which of the slower inputs of [`Extras`] a provider reads.
+#[derive(Clone, Copy, Default)]
+pub struct Inputs {
+    /// Relative SASA per residue, computed in the background.
+    pub sasa: bool,
+    /// The chains' full sequences, read from the structure's file in the
+    /// background.
+    pub entity: bool,
+    /// UniProt features, fetched in the background.
+    pub uniprot: bool,
+    /// The protein chains of all loaded structures.
+    pub peers: bool,
+}
+
+/// Inputs that arrive after a structure is loaded. A provider that asks
+/// for one in [`TrackProvider::inputs`] is computed again once it is ready,
+/// and gets `None` until then.
+#[derive(Default)]
+pub struct Extras<'a> {
+    pub rel_sasa: Option<&'a [f32]>,
+    pub entity: Option<&'a HashMap<String, EntityChain>>,
+    pub uniprot: Option<&'a uniprot::Data>,
+    pub peers: Option<&'a Peers>,
+    pub structure: Option<StructureId>,
+    /// The shown model, 1-based.
+    pub model: u32,
+}
+
 /// Everything a provider may read about one structure at one frame.
 pub struct TrackContext<'a> {
     pub loaded: &'a LoadedStructure,
@@ -155,6 +187,7 @@ pub struct TrackContext<'a> {
     /// The strip's rows for this structure: chain name and residues.
     pub rows: &'a [(String, Range<u32>)],
     pub antibody: AntibodySettings,
+    pub extras: Extras<'a>,
 }
 
 impl TrackContext<'_> {
@@ -185,6 +218,23 @@ pub trait TrackProvider: Sync {
     fn uses_antibody_settings(&self) -> bool {
         false
     }
+    /// The frame number the result depends on, `0` if it does not.
+    fn frame_key(&self, _loaded: &LoadedStructure, frame: usize) -> usize {
+        if self.per_frame() {
+            frame
+        } else {
+            0
+        }
+    }
+    /// The slow inputs this track reads; see [`Extras`].
+    fn inputs(&self) -> Inputs {
+        Inputs::default()
+    }
+    /// Whether the track needs the network, and so is left out of
+    /// `sequence tracks all`.
+    fn online(&self) -> bool {
+        false
+    }
     fn compute(&self, ctx: &TrackContext) -> TrackData;
 }
 
@@ -205,6 +255,10 @@ pub const PROVIDERS: &[&dyn TrackProvider] = &[
     &super::providers::AltLocs,
     &super::providers::Modified,
     &super::providers::Antibody,
+    &super::providers::Burial,
+    &super::providers::Conservation,
+    &super::providers::Uniprot,
+    &super::providers::Variants,
 ];
 
 pub fn legend(label: &str, color: u32) -> LegendEntry {

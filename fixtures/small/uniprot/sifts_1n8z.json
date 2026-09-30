@@ -1,0 +1,1 @@
+{"1n8z":{"UniProt":{"P04626":{"name":"ERBB2_HUMAN","mappings":[{"entity_id":3,"chain_id":"C","struct_asym_id":"C","unp_start":23,"unp_end":629,"start":{"author_residue_number":1,"author_insertion_code":"","residue_number":1},"end":{"author_residue_number":607,"author_insertion_code":"","residue_number":607},"identity":1.0,"coverage":0.492}],"identifier":"ERBB2_HUMAN"}}}}

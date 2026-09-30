@@ -77,6 +77,7 @@ fn run(l: &LoadedStructure, antibody: AntibodySettings) -> TrackData {
         positions: coords.positions(),
         rows: &rows,
         antibody,
+        extras: Default::default(),
     })
 }
 

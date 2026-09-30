@@ -1,11 +1,14 @@
 //! Tracks about the chain itself: secondary structure, numbering, and the
 //! residues the experiment did not place.
 
+use std::ops::Range;
+
 use vv_core::dssp::DsspCode;
+use vv_core::seqfeat::{unobserved, unobserved_in_entity, Gap};
 use vv_render::color::by_secondary_structure;
 
 use super::hex;
-use crate::sequence::tracks::{legend, Glyph, TrackContext, TrackData, TrackProvider};
+use crate::sequence::tracks::{legend, Glyph, Inputs, TrackContext, TrackData, TrackProvider};
 
 pub struct SecondaryStructure;
 
@@ -102,9 +105,10 @@ fn gap_note(gap: &vv_core::seqfeat::Gap, after: bool) -> String {
         .residues
         .iter()
         .take(LISTED_NAMES)
-        .map(|u| match u.ins {
-            0 => format!("{} {}", u.name, u.seq),
-            c => format!("{} {}{}", u.name, u.seq, c as char),
+        .map(|u| match u.number {
+            Some((seq, 0)) => format!("{} {seq}", u.name),
+            Some((seq, ins)) => format!("{} {seq}{}", u.name, ins as char),
+            None => format!("{} #{}", u.name, u.position),
         })
         .collect();
     let more = gap.residues.len().saturating_sub(LISTED_NAMES);
@@ -130,8 +134,27 @@ impl TrackProvider for Missing {
         "Missing"
     }
 
+    /// Only a file that lists unobserved residues for several models has
+    /// a gap list that changes with the shown model.
+    fn frame_key(&self, loaded: &vv_scene::LoadedStructure, frame: usize) -> usize {
+        if lists_several_models(&loaded.structure.topology) {
+            frame
+        } else {
+            0
+        }
+    }
+
+    fn inputs(&self) -> Inputs {
+        Inputs {
+            entity: true,
+            ..Inputs::default()
+        }
+    }
+
+    /// Residues of the chain's full sequence that no modeled residue
+    /// aligns to, when the file gives the sequence; else those the file
+    /// lists, placed by author number.
     fn compute(&self, ctx: &TrackContext) -> TrackData {
-        let top = ctx.top();
         let mut track = ctx.new_track(
             Glyph::Edge,
             vec![
@@ -142,8 +165,8 @@ impl TrackProvider for Missing {
                 legend("Residues with no coordinates (gap after)", hex(0xC0392B)),
             ],
         );
-        for (_, residues) in ctx.rows {
-            for gap in vv_core::seqfeat::unobserved(top, residues.clone()) {
+        for (name, residues) in ctx.rows {
+            for gap in gaps_of(ctx, name, residues) {
                 let after = gap.before >= residues.end;
                 let at = if after { residues.end - 1 } else { gap.before };
                 track.mark(at, if after { 2 } else { 1 });
@@ -152,4 +175,22 @@ impl TrackProvider for Missing {
         }
         track.finish()
     }
+}
+
+fn gaps_of(ctx: &TrackContext, name: &str, residues: &Range<u32>) -> Vec<Gap> {
+    let entity = ctx.extras.entity.and_then(|e| e.get(name));
+    match entity {
+        Some(entity) => unobserved_in_entity(ctx.top(), residues.clone(), entity, ctx.extras.model),
+        None => unobserved(ctx.top(), residues.clone()),
+    }
+}
+
+/// Whether the unobserved-residue table has rows for more than one model
+/// (its rows are grouped by model).
+fn lists_several_models(top: &vv_core::Topology) -> bool {
+    let Some(cat) = top.annotations.category("pdbx_unobs_or_zero_occ_residues") else {
+        return false;
+    };
+    let last = cat.rows.len().saturating_sub(1);
+    cat.get("PDB_model_num", 0) != cat.get("PDB_model_num", last)
 }
