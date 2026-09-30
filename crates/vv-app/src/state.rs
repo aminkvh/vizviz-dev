@@ -1567,6 +1567,14 @@ struct SvgCircle {
     color: [u8; 3],
 }
 
+/// Painter's-order key: larger is farther, under either projection. The
+/// `w` that `project_to_pixel` returns is constant in orthographic, so it
+/// scales sizes but cannot order them; the camera is reversed-Z (near 1).
+fn far_key(view_proj: vv_core::glam::Mat4, world: vv_core::glam::Vec3) -> f32 {
+    let clip = view_proj * world.extend(1.0);
+    1.0 - clip.z / clip.w
+}
+
 /// One dash of the interaction overlay, projected: a stroked segment.
 struct SvgDash {
     from: (f32, f32),
@@ -1600,13 +1608,13 @@ fn interaction_dashes(
             if ad <= 0.0 || bd <= 0.0 {
                 continue;
             }
-            let depth = 0.5 * (ad + bd);
+            let scale = 0.5 * (ad + bd);
             let bytes = crate::gpu_cache::interactions::color(dash.kind).to_le_bytes();
             out.push(SvgDash {
                 from: (ax, ay),
                 to: (bx, by),
-                width: 2.0 * crate::gpu_cache::interactions::DASH_RADIUS * proj_scale / depth,
-                depth,
+                width: 2.0 * crate::gpu_cache::interactions::DASH_RADIUS * proj_scale / scale,
+                depth: 0.5 * (far_key(view_proj, dash.from) + far_key(view_proj, dash.to)),
                 color: [bytes[0], bytes[1], bytes[2]],
             });
         }
@@ -1689,7 +1697,7 @@ fn atom_circles(
                 x,
                 y,
                 r,
-                depth,
+                depth: far_key(view_proj, pos),
                 color: [bytes[0], bytes[1], bytes[2]],
             });
         }
@@ -1929,6 +1937,24 @@ mod tests {
         assert_eq!(circles.len(), atoms, "every atom should be drawn");
         assert!(circles.iter().all(|c| c.r > 0.0));
         assert!(circles.iter().all(|c| c.depth > 0.0));
+    }
+
+    #[test]
+    fn atom_circles_are_painted_far_to_near_in_both_projections() {
+        use vv_render::Projection;
+        for projection in [Projection::Orthographic, Projection::Perspective] {
+            let mut scene = Scene::new();
+            let mut history = CommandHistory::new(10);
+            let (_id, mut camera) = load_1crn_framed(&mut scene, &mut history);
+            camera.projection = projection;
+            let (w, h) = (400.0, 300.0);
+            let proj = camera.proj(w / h);
+            let view = camera.view();
+            let circles = atom_circles(&scene, proj * view, proj.y_axis.y * h * 0.5, w, h);
+            let depths: Vec<f32> = circles.iter().map(|c| c.depth).collect();
+            let (first, last) = (depths[0], depths[depths.len() - 1]);
+            assert!(first > last, "{projection:?}: nearest must paint last");
+        }
     }
 
     #[test]
