@@ -5,7 +5,8 @@ use std::collections::HashSet;
 
 use proptest::prelude::*;
 use vv_core::antibody::{
-    find_domains, Annotation, CdrDefinition, ChainType, Domain, Label, Region, Scheme,
+    find_domains, find_variable_domains, Annotation, CdrDefinition, ChainType, Domain, Label,
+    Region, Scheme,
 };
 
 // Trastuzumab Fab (wwPDB 1N8Z): framework/CDR split at the IMGT boundaries.
@@ -293,6 +294,131 @@ fn martin_moves_the_light_cdr2_insertion_site() {
     let martin = labels(&l, Scheme::Martin);
     assert!(chothia.contains(&"54A".to_string()));
     assert!(martin.contains(&"52A".to_string()));
+}
+
+/// Labels from `first` to `last` inclusive, as a space-separated string.
+fn between(all: &[String], first: &str, last: &str) -> String {
+    let a = all.iter().position(|x| x == first).unwrap();
+    let b = all.iter().position(|x| x == last).unwrap();
+    all[a..=b].join(" ")
+}
+
+#[test]
+fn martin_heavy_framework_three_inserts_at_h72_where_chothia_inserts_at_h82() {
+    let h = trastuzumab_heavy();
+    let martin = labels(&h, Scheme::Martin);
+    let chothia = labels(&h, Scheme::Chothia);
+    let expected = |ins: &str, at: &str| {
+        let mut out: Vec<String> = (66..=92).map(|n| n.to_string()).collect();
+        let pos = out.iter().position(|x| x == at).unwrap();
+        for (k, letter) in ["A", "B", "C"].iter().enumerate() {
+            out.insert(pos + 1 + k, format!("{ins}{letter}"));
+        }
+        out.join(" ")
+    };
+    assert_eq!(between(&martin, "66", "92"), expected("72", "72"));
+    assert_eq!(between(&chothia, "66", "92"), expected("82", "82"));
+}
+
+#[test]
+fn martin_light_framework_sites() {
+    let kappa = trastuzumab_light();
+    assert_eq!(
+        labels(&kappa, Scheme::Martin),
+        labels(&kappa, Scheme::Chothia)
+    );
+    let lambda = "QSVLTQPPSASGTPGQRVTISCSGSSSNIGSNTVNWYQQLPGTAPKLLIYSNNQRPSGVPDRFSGSKSGTSASLAISGLQSEDEADYYCAAWDDSLNGVVFGGGTKLTVLG";
+    let (martin, chothia) = (
+        labels(lambda, Scheme::Martin),
+        labels(lambda, Scheme::Chothia),
+    );
+    assert_eq!(
+        between(&martin, "1", "11"),
+        "1 2 3 4 5 6 8 9 10 11",
+        "lambda FR1 gap at L7"
+    );
+    assert_eq!(
+        between(&chothia, "1", "11"),
+        "1 2 3 4 5 6 7 8 9 11",
+        "Chothia gap at L10"
+    );
+    assert_eq!(between(&martin, "105", "107"), "105 106 106A 107");
+}
+
+#[test]
+fn deleted_loop_labels_follow_each_schemes_own_site() {
+    let dropped = |seq: &str, scheme: Scheme, lo: u16, hi: u16| -> Vec<u16> {
+        let l = labels(seq, scheme);
+        (lo..=hi).filter(|n| !l.contains(&n.to_string())).collect()
+    };
+    let h = heavy("GFNIKDT", H_CDR2, H_CDR3);
+    assert_eq!(dropped(&h, Scheme::Kabat, 26, 35), [35]);
+    assert_eq!(dropped(&h, Scheme::Chothia, 26, 35), [31]);
+    assert_eq!(dropped(&h, Scheme::Martin, 26, 35), [31]);
+    let l = light("QDVNA", L_CDR2, L_CDR3);
+    assert_eq!(dropped(&l, Scheme::Kabat, 24, 34), [28]);
+    assert_eq!(dropped(&l, Scheme::Chothia, 24, 34), [31]);
+    assert_eq!(dropped(&l, Scheme::Martin, 24, 34), [30]);
+    let l2 = light(L_CDR1, "SA", L_CDR3);
+    assert_eq!(dropped(&l2, Scheme::Chothia, 50, 56), [54]);
+    assert_eq!(dropped(&l2, Scheme::Martin, 50, 56), [52]);
+}
+
+// Human T-cell receptors A6 (wwPDB 1AO7) and 1MI5: variable domain and the
+// start of the constant domain.
+const A6_ALPHA: &str = "KEVEQNSGPLSVPEGAIASLNCTYSDRGSQSFFWYRQYSGKSPELIMSIYSNGDKEDGRFTAQLNKASQYVSLLIRDSQPSDSATYLCAVTTDSWGKLQFGAGTQVVVTPDIQNPDPAVYQLRD";
+const A6_BETA: &str = "NAGVTQTPKFQVLKTGQSMTLQCAQDMNHEYMSWYRQDPGMGLRLIHYSVGAGITDQGEVPNGYNVSRSTTEDFPLRLLSAAPSQTSVYFCASRPGLAGGRPEQYFGPGTRLTVTEDLKNVFPPEVAVFEPSE";
+const MI5_ALPHA: &str = "KTTQPNSMESNEEEPVHLPCNHSTISGTDYIHWYRQLPSQGPEYVIHGLTSNVNNRMASLAIAEDRKSSTLILHRATLRDAAVYYCILPLAGGTSYGKLTFGQGTILTVHPNIQNPDPAVYQLRDSKSSDKSVCL";
+const MI5_BETA: &str = "GVSQSPRYKVAKRGQDVALRCDPISGHVSLFWYQQALGQGPEFLTYFQNEAQLDKSGLPSDRFFAERPEGSVSTLKIQRTQQEDSAVYLCASSLGQAYEQYFGPGTRLTVTEDLKNVFPPEVAVFEPSE";
+
+fn only_receptor(seq: &str) -> Domain {
+    let mut found = find_variable_domains(seq);
+    assert_eq!(found.len(), 1, "expected one domain in {seq}");
+    found.remove(0)
+}
+
+#[test]
+fn receptor_chains_are_found_as_receptors_and_not_as_antibodies() {
+    for (seq, chain) in [
+        (A6_ALPHA, ChainType::TcrAlpha),
+        (A6_BETA, ChainType::TcrBeta),
+        (MI5_ALPHA, ChainType::TcrAlpha),
+        (MI5_BETA, ChainType::TcrBeta),
+    ] {
+        assert_eq!(only_receptor(seq).chain, chain);
+        assert!(find_domains(seq).is_empty());
+    }
+    for (seq, chain) in [
+        (trastuzumab_heavy(), ChainType::Heavy),
+        (trastuzumab_light(), ChainType::Kappa),
+    ] {
+        assert_eq!(only_receptor(&seq).chain, chain);
+    }
+}
+
+#[test]
+fn receptor_domains_carry_imgt_anchors_and_the_published_cdrs() {
+    let at = |seq: &str, n: u16| {
+        let labels = only_receptor(seq).numbering(Scheme::Imgt);
+        let (i, _) = labels
+            .iter()
+            .find(|(_, l)| l.number == n && l.insertion().is_none())
+            .unwrap();
+        seq.as_bytes()[*i] as char
+    };
+    for seq in [A6_ALPHA, A6_BETA, MI5_ALPHA, MI5_BETA] {
+        let anchors: String = [23, 41, 104, 118, 119]
+            .iter()
+            .map(|&n| at(seq, n))
+            .collect();
+        assert_eq!(anchors, "CWCFG", "{seq}");
+    }
+    let imgt = |seq: &str| {
+        let notes = only_receptor(seq).annotate(Scheme::Imgt, CdrDefinition::Imgt);
+        [Region::Cdr1, Region::Cdr2, Region::Cdr3].map(|r| residues(seq, &notes, r))
+    };
+    assert_eq!(imgt(A6_ALPHA), ["DRGSQS", "IYSNGD", "AVTTDSWGKLQ"]);
+    assert_eq!(imgt(A6_BETA), ["MNHEY", "SVGAGI", "ASRPGLAGGRPEQY"]);
 }
 
 #[test]

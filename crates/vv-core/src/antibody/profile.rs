@@ -1,13 +1,17 @@
 //! Framework-only position-specific scoring profiles, built once from the
-//! seed sequences in `seeds.rs`.
+//! seed sequences in `seeds.rs` (antibodies) and `tcr_seeds.rs` (T-cell
+//! receptors).
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use super::seeds;
+use super::numbering::Label;
 use super::ChainType;
+use super::{seeds, tcr_seeds};
 
-/// One clustered framework example: `fr` is FR1..FR4 as one-letter strings,
-/// gap columns already omitted, `-` marking a truncated FR4 tail.
+/// One clustered framework example: `fr` is FR1..FR4 as one-letter strings
+/// with the family's empty columns omitted, `-` marking a column with no
+/// residue (a truncated end, or disordered).
 pub(super) struct Seed {
     pub weight: u32,
     pub fr: [&'static str; 4],
@@ -17,35 +21,74 @@ pub(super) struct Seed {
 /// are never scored.
 const FR_RANGES: [(u16, u16); 4] = [(1, 26), (39, 55), (66, 104), (118, 128)];
 
-pub(super) const N_COLS: usize = 93;
-/// Index of the first column after each CDR loop (FR2, FR3, FR4 starts).
-pub(super) const LOOP_EXIT: [usize; 3] = [26, 43, 82];
+/// Columns before the first CDR: the alignment may start anywhere up to the
+/// first conserved Cys (IMGT 23).
 pub(super) const C23: usize = 22;
-pub(super) const C104: usize = 81;
 
-/// Column of the conserved anchors used to sanity-check an alignment.
+/// Column of the conserved Trp (IMGT 41), used to sanity-check an alignment.
 pub(super) const W41: usize = 26 + 2;
 
-/// IMGT columns a germline leaves empty in FR1 and FR3.
-fn empty_columns(chain: ChainType) -> &'static [u16] {
-    match chain {
-        ChainType::Heavy => &[10, 73],
-        ChainType::Kappa => &[73, 81, 82],
-        ChainType::Lambda => &[10, 73, 81, 82],
-    }
+/// Chains of one type that leave the same framework columns empty share a
+/// profile, the way the germline families of an antibody type do.
+struct Family {
+    chain: ChainType,
+    /// IMGT columns the family leaves empty.
+    empty: &'static [u16],
+    /// Insertion columns the family fills (`(84, 'A')` is IMGT 84A).
+    extras: &'static [(u16, char)],
+    seeds: &'static [Seed],
 }
 
-pub(super) fn column_number(idx: usize) -> u16 {
-    let (mut idx, mut out) = (idx as u16, 0);
+const ALPHA_EXTRAS: &[(u16, char)] = &[(84, 'A'), (84, 'B'), (84, 'C')];
+
+fn families() -> [Family; 7] {
+    let family = |chain, empty, extras, seeds| Family {
+        chain,
+        empty,
+        extras,
+        seeds,
+    };
+    [
+        family(ChainType::Heavy, &[10, 73], &[], seeds::HEAVY),
+        family(ChainType::Kappa, &[73, 81, 82], &[], seeds::KAPPA),
+        family(ChainType::Lambda, &[10, 73, 81, 82], &[], seeds::LAMBDA),
+        family(
+            ChainType::TcrAlpha,
+            &[69, 70, 71, 72, 73],
+            &[],
+            tcr_seeds::ALPHA_69_73,
+        ),
+        family(
+            ChainType::TcrAlpha,
+            &[71, 72, 73, 74, 75, 76, 77],
+            ALPHA_EXTRAS,
+            tcr_seeds::ALPHA_71_77,
+        ),
+        family(ChainType::TcrBeta, &[73, 82], &[], tcr_seeds::BETA_73_82),
+        family(ChainType::TcrBeta, &[82], &[], tcr_seeds::BETA_82),
+    ]
+}
+
+/// IMGT label of every profile column, in column order.
+fn column_labels(extras: &[(u16, char)]) -> Vec<Label> {
+    let mut out = Vec::new();
     for (lo, hi) in FR_RANGES {
-        let len = hi - lo + 1;
-        if idx < len {
-            out = lo + idx;
-            break;
+        for number in lo..=hi {
+            out.push(Label::new(number));
+            for &(after, letter) in extras.iter().filter(|e| e.0 == number) {
+                out.push(Label::with_insertion(after, letter));
+            }
         }
-        idx -= len;
     }
     out
+}
+
+/// Which of the four framework blocks a column number belongs to.
+fn block_of(number: u16) -> usize {
+    FR_RANGES
+        .iter()
+        .position(|&(_, hi)| number <= hi)
+        .unwrap_or(3)
 }
 
 /// Allowed CDR loop length and soft penalty, in residues.
@@ -78,6 +121,12 @@ const BARRED: f32 = -1.0e8;
 
 pub(super) struct Profile {
     pub chain: ChainType,
+    /// IMGT label of each column.
+    pub labels: Vec<Label>,
+    /// Index of the first column after each CDR loop (FR2, FR3, FR4 starts).
+    pub loop_exit: [usize; 3],
+    /// Column of the second conserved Cys (IMGT 104).
+    pub c104: usize,
     /// Match log-odds in bits per column; index 20 is any non-standard letter.
     pub score: Vec<[f32; 21]>,
     /// Columns a germline leaves empty: deleting them is free.
@@ -129,8 +178,11 @@ const BLOSUM62: [[i8; 20]; 20] = [
 
 /// Weight of the substitution-matrix pseudocounts against observed counts.
 const PSEUDOCOUNT: f32 = 4.0;
-/// Score of a residue placed in a column the germline leaves empty.
+/// Score of a residue placed in a column the germline leaves empty. Receptor
+/// families are told apart by which columns they leave empty, so a residue
+/// there costs more.
 const EMPTY_COLUMN_SCORE: f32 = -1.0;
+const RECEPTOR_EMPTY_SCORE: f32 = -4.0;
 
 /// `target[b][a]`: probability of seeing `a` in a column where `b` is
 /// conserved, from BLOSUM62 half-bit scores and the background.
@@ -147,30 +199,45 @@ fn substitution_targets() -> [[f32; 20]; 20] {
     t
 }
 
-fn column_counts(seeds: &[Seed], chain: ChainType) -> Vec<[f32; 20]> {
-    let mut counts = vec![[0.0f32; 20]; N_COLS];
-    let empty = empty_columns(chain);
-    for seed in seeds {
+/// Residue counts per column label over one family's seeds; a seed counts
+/// less than its multiplicity.
+fn family_counts(family: &Family) -> HashMap<Label, [f32; 20]> {
+    let labels = column_labels(family.extras);
+    let mut counts: HashMap<Label, [f32; 20]> = HashMap::new();
+    for seed in family.seeds {
         let w = 1.0 + (seed.weight as f32).ln();
-        let mut idx = 0;
-        for (block, &(lo, hi)) in FR_RANGES.iter().enumerate() {
-            let mut letters = seed.fr[block].bytes();
-            for col in lo..=hi {
-                idx += 1;
-                if empty.contains(&col) {
-                    continue;
-                }
-                let a = letters.next().map_or(20, aa_index);
-                if a < 20 {
-                    counts[idx - 1][a] += w;
-                }
+        let mut letters: Vec<_> = seed.fr.iter().map(|s| s.bytes()).collect();
+        for label in &labels {
+            if is_empty(family, label) {
+                continue;
+            }
+            let a = letters[block_of(label.number)].next().map_or(20, aa_index);
+            if a < 20 {
+                counts.entry(*label).or_default()[a] += w;
             }
         }
     }
     counts
 }
 
-fn scores_from_counts(counts: &[[f32; 20]], free: &[bool]) -> Vec<[f32; 21]> {
+/// Counts pooled over every family of one chain type: families of a type
+/// differ in which columns they fill, not in what the shared ones hold.
+fn pooled_counts(chain: ChainType, families: &[Family]) -> HashMap<Label, [f32; 20]> {
+    let mut pool: HashMap<Label, [f32; 20]> = HashMap::new();
+    for family in families.iter().filter(|f| f.chain == chain) {
+        for (label, counts) in family_counts(family) {
+            let slot = pool.entry(label).or_default();
+            slot.iter_mut().zip(counts).for_each(|(p, c)| *p += c);
+        }
+    }
+    pool
+}
+
+fn is_empty(family: &Family, label: &Label) -> bool {
+    label.insertion().is_none() && family.empty.contains(&label.number)
+}
+
+fn scores_from_counts(counts: &[[f32; 20]], free: &[bool], empty_score: f32) -> Vec<[f32; 21]> {
     let target = substitution_targets();
     counts
         .iter()
@@ -182,7 +249,7 @@ fn scores_from_counts(counts: &[[f32; 20]], free: &[bool]) -> Vec<[f32; 21]> {
                 let pseudo: f32 = (0..20).map(|b| c[b] / n.max(1e-6) * target[b][a]).sum();
                 let p = (c[a] + PSEUDOCOUNT * pseudo) / (n + PSEUDOCOUNT);
                 row[a] = if is_free {
-                    EMPTY_COLUMN_SCORE
+                    empty_score
                 } else {
                     (p / BACKGROUND[a]).log2()
                 };
@@ -206,15 +273,33 @@ fn loop_priors(chain: ChainType) -> [LoopPrior; 3] {
         ],
         ChainType::Kappa => [prior(0, 5, 12, 20), prior(0, 3, 3, 10), prior(0, 8, 11, 20)],
         ChainType::Lambda => [prior(0, 6, 11, 20), prior(0, 3, 7, 12), prior(0, 8, 13, 20)],
+        ChainType::TcrAlpha => [prior(0, 5, 7, 14), prior(0, 4, 7, 14), prior(0, 8, 16, 30)],
+        ChainType::TcrBeta => [prior(0, 5, 6, 12), prior(0, 6, 7, 12), prior(0, 8, 16, 30)],
     }
 }
 
-fn build(chain: ChainType, seeds: &[Seed]) -> Profile {
-    let empty = empty_columns(chain);
-    let free_gap: Vec<bool> = (0..N_COLS)
-        .map(|i| empty.contains(&column_number(i)))
+fn build(family: &Family, families: &[Family]) -> Profile {
+    let chain = family.chain;
+    let labels = column_labels(family.extras);
+    let free_gap: Vec<bool> = labels.iter().map(|l| is_empty(family, l)).collect();
+    let pool = pooled_counts(chain, families);
+    let counts: Vec<[f32; 20]> = labels
+        .iter()
+        .map(|l| pool.get(l).copied().unwrap_or([0.0; 20]))
         .collect();
-    let score = scores_from_counts(&column_counts(seeds, chain), &free_gap);
+    let empty_score = match chain.is_antibody() {
+        true => EMPTY_COLUMN_SCORE,
+        false => RECEPTOR_EMPTY_SCORE,
+    };
+    let score = scores_from_counts(&counts, &free_gap, empty_score);
+    let column_of = |number: u16| {
+        labels
+            .iter()
+            .position(|l| l.number == number && l.insertion().is_none())
+            .unwrap_or(0)
+    };
+    let loop_exit = [39, 66, 118].map(column_of);
+    let c104 = column_of(104);
     let ideal = score
         .iter()
         .zip(&free_gap)
@@ -224,6 +309,9 @@ fn build(chain: ChainType, seeds: &[Seed]) -> Profile {
     let loop_costs = loop_priors(chain).map(|p| p.costs());
     Profile {
         chain,
+        labels,
+        loop_exit,
+        c104,
         score,
         free_gap,
         loop_costs,
@@ -231,13 +319,10 @@ fn build(chain: ChainType, seeds: &[Seed]) -> Profile {
     }
 }
 
-pub(super) fn profiles() -> &'static [Profile; 3] {
-    static PROFILES: OnceLock<[Profile; 3]> = OnceLock::new();
+pub(super) fn profiles() -> &'static [Profile] {
+    static PROFILES: OnceLock<Vec<Profile>> = OnceLock::new();
     PROFILES.get_or_init(|| {
-        [
-            build(ChainType::Heavy, seeds::HEAVY),
-            build(ChainType::Kappa, seeds::KAPPA),
-            build(ChainType::Lambda, seeds::LAMBDA),
-        ]
+        let all = families();
+        all.iter().map(|f| build(f, &all)).collect()
     })
 }

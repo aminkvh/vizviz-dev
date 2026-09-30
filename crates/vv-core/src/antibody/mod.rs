@@ -1,31 +1,37 @@
 //! Antibody variable-domain detection and numbering from sequence alone.
 //!
 //! A domain is found by aligning the chain to framework profiles (heavy,
-//! kappa, lambda) built from public PDB sequences, with the CDRs treated
-//! as free-length loops. The IMGT frame is canonical; Kabat, Chothia and
-//! Martin numbers are derived from it by length rules. Method, data
-//! provenance, licences and measured accuracy: `docs/ANTIBODY.md`.
+//! kappa, lambda, and T-cell receptor alpha and beta) built from public PDB
+//! sequences, with the CDRs treated as free-length loops. The IMGT frame is
+//! canonical; Kabat, Chothia, Martin and AHo numbers are derived from it by
+//! length rules. Method, data provenance, licences and measured accuracy:
+//! `docs/ANTIBODY.md`.
 
+mod aho;
 mod align;
 mod cdr;
 mod numbering;
 mod profile;
 mod seeds;
+mod tcr_seeds;
 mod topology;
 
 pub use cdr::{CdrDefinition, Region};
 pub use numbering::{Label, Scheme};
-pub use topology::{cdr_residues, find_in_residues, CdrResidue};
+pub use topology::{cdr_residues, chain_domains, find_in_residues, AntibodyCache, CdrResidue};
 
 use align::{align, Alignment, Slot};
-use profile::{aa_index, profiles, Profile, C104, C23, W41};
+use profile::{aa_index, profiles, Profile, C23, W41};
 
-/// Variable-domain family of a chain.
+/// Variable-domain family of a chain: an antibody heavy or light chain, or
+/// a T-cell receptor alpha or beta chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChainType {
     Heavy,
     Kappa,
     Lambda,
+    TcrAlpha,
+    TcrBeta,
 }
 
 impl ChainType {
@@ -34,15 +40,24 @@ impl ChainType {
             ChainType::Heavy => "Heavy",
             ChainType::Kappa => "Kappa",
             ChainType::Lambda => "Lambda",
+            ChainType::TcrAlpha => "TCR alpha",
+            ChainType::TcrBeta => "TCR beta",
         }
     }
 
-    /// `H` for heavy, `L` for both light chains.
+    /// `H` for heavy, `L` for both light chains, `A` and `B` for the
+    /// receptor chains.
     pub fn letter(self) -> char {
         match self {
             ChainType::Heavy => 'H',
             ChainType::Kappa | ChainType::Lambda => 'L',
+            ChainType::TcrAlpha => 'A',
+            ChainType::TcrBeta => 'B',
         }
+    }
+
+    pub fn is_antibody(self) -> bool {
+        !matches!(self, ChainType::TcrAlpha | ChainType::TcrBeta)
     }
 }
 
@@ -71,6 +86,11 @@ pub struct Domain {
 
 /// Minimum `confidence` for a domain to be reported.
 const MIN_CONFIDENCE: f32 = 0.30;
+/// Antibody confidence above which receptor profiles are not consulted.
+const ANTIBODY_SURE: f32 = 0.5;
+/// Receptor profiles rest on fewer seed chains, so genuine receptors of a
+/// gene family the seeds miss score lower; nothing else reaches that far.
+const RECEPTOR_FLOOR_RATIO: f32 = 0.5;
 /// Shortest stretch worth aligning (a V domain is at least ~90 residues).
 const MIN_STRETCH: usize = 80;
 /// Distance range between the two conserved Cys of a V domain.
@@ -84,7 +104,8 @@ const FR4_REACH: usize = 55;
 impl Domain {
     /// Label of each domain residue in `scheme`, as `(sequence index,
     /// label)` in sequence order. IMGT insertion letters stand for `.1`,
-    /// `.2`, ... (`112A` is IMGT 112.1).
+    /// `.2`, ... (`112A` is IMGT 112.1). T-cell receptor domains are
+    /// numbered in IMGT whatever `scheme` says.
     pub fn numbering(&self, scheme: Scheme) -> Vec<(usize, Label)> {
         let labels = numbering::relabel(scheme, self.chain, &self.imgt);
         (self.start..self.end).zip(labels).collect()
@@ -139,7 +160,7 @@ fn candidate_window(q: &[u8]) -> Option<(usize, usize)> {
     ))
 }
 
-fn anchors_hold(q: &[u8], slots: &[(usize, Slot)]) -> bool {
+fn anchors_hold(q: &[u8], slots: &[(usize, Slot)], c104: usize) -> bool {
     let at = |col: usize| {
         slots
             .iter()
@@ -147,14 +168,34 @@ fn anchors_hold(q: &[u8], slots: &[(usize, Slot)]) -> bool {
             .map(|(i, _)| q[*i])
     };
     let is = |col, letter: u8| at(col) == Some(aa_index(letter) as u8);
-    is(C23, b'C') && is(C104, b'C') && is(W41, b'W')
+    is(C23, b'C') && is(c104, b'C') && is(W41, b'W')
 }
 
-fn best_alignment(q: &[u8]) -> Option<(&'static Profile, Alignment)> {
+/// Best-scoring profile among those selected by `wanted`.
+fn best_of(q: &[u8], wanted: impl Fn(&Profile) -> bool) -> Option<(&'static Profile, Alignment)> {
     profiles()
         .iter()
+        .filter(|p| wanted(p))
         .filter_map(|p| align(q, p).map(|a| (p, a)))
         .max_by(|a, b| a.1.score.total_cmp(&b.1.score))
+}
+
+/// Best profile overall. Receptor profiles are tried only when no antibody
+/// profile fits convincingly: real antibodies clear `ANTIBODY_SURE` and
+/// score near zero against receptors, so this saves their alignments.
+fn best_alignment(q: &[u8]) -> Option<(&'static Profile, Alignment)> {
+    let antibody = best_of(q, |p| p.chain.is_antibody());
+    if antibody
+        .as_ref()
+        .is_some_and(|(p, a)| a.score / p.ideal >= ANTIBODY_SURE)
+    {
+        return antibody;
+    }
+    let receptor = best_of(q, |p| !p.chain.is_antibody());
+    match (antibody, receptor) {
+        (Some(a), Some(r)) => Some(if r.1.score > a.1.score { r } else { a }),
+        (a, r) => a.or(r),
+    }
 }
 
 fn scan(q: &[u8], lo: usize, hi: usize, min_confidence: f32, out: &mut Vec<Domain>) {
@@ -169,7 +210,11 @@ fn scan(q: &[u8], lo: usize, hi: usize, min_confidence: f32, out: &mut Vec<Domai
         return;
     };
     let confidence = hit.score / profile.ideal;
-    if confidence < min_confidence || !anchors_hold(&q[from..to], &hit.slots) {
+    let floor = match profile.chain.is_antibody() {
+        true => min_confidence,
+        false => min_confidence * RECEPTOR_FLOOR_RATIO,
+    };
+    if confidence < floor || !anchors_hold(&q[from..to], &hit.slots, profile.c104) {
         return;
     }
     let start = from + hit.slots[0].0;
@@ -181,21 +226,35 @@ fn scan(q: &[u8], lo: usize, hi: usize, min_confidence: f32, out: &mut Vec<Domai
         end,
         score: hit.score,
         confidence,
-        imgt: numbering::imgt_labels(&slots),
+        imgt: numbering::imgt_labels(&slots, &profile.labels),
     });
     scan(q, lo, start, min_confidence, out);
     scan(q, end, hi, min_confidence, out);
 }
 
 /// Finds every antibody variable domain (heavy, kappa, lambda) in a
-/// one-letter protein sequence, in sequence order. Non-antibody chains
-/// return an empty list.
+/// one-letter protein sequence, in sequence order. Non-antibody chains,
+/// T-cell receptors included, return an empty list.
 pub fn find_domains(seq: &str) -> Vec<Domain> {
     find_domains_with(seq, MIN_CONFIDENCE)
 }
 
 /// [`find_domains`] with a caller-chosen minimum [`Domain::confidence`].
 pub fn find_domains_with(seq: &str, min_confidence: f32) -> Vec<Domain> {
+    let mut all = find_variable_domains_with(seq, min_confidence);
+    all.retain(|d| d.chain.is_antibody());
+    all
+}
+
+/// Like [`find_domains`], but also reports T-cell receptor alpha and beta
+/// variable domains. Each domain goes to the profile it fits best, so a
+/// receptor is never reported as an antibody or the other way round.
+pub fn find_variable_domains(seq: &str) -> Vec<Domain> {
+    find_variable_domains_with(seq, MIN_CONFIDENCE)
+}
+
+/// [`find_variable_domains`] with a caller-chosen minimum confidence.
+pub fn find_variable_domains_with(seq: &str, min_confidence: f32) -> Vec<Domain> {
     let q: Vec<u8> = seq.bytes().map(|b| aa_index(b) as u8).collect();
     let mut out = Vec::new();
     scan(&q, 0, q.len(), min_confidence, &mut out);

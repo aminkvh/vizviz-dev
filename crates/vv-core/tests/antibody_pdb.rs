@@ -7,110 +7,11 @@
 //! prints the accuracy report and the timing run.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 use vv_core::antibody::{find_domains, ChainType, Domain, Label, Scheme};
 
-struct Residue {
-    label: Label,
-    aa: char,
-}
-
-struct Chain {
-    id: char,
-    residues: Vec<Residue>,
-}
-
-impl Chain {
-    fn sequence(&self) -> String {
-        self.residues.iter().map(|r| r.aa).collect()
-    }
-
-    fn author(&self, d: &Domain) -> Vec<Label> {
-        self.residues[d.start..d.end]
-            .iter()
-            .map(|r| r.label)
-            .collect()
-    }
-}
-
-fn one_letter(name: &str) -> char {
-    const AA: [(&str, char); 22] = [
-        ("ALA", 'A'),
-        ("ARG", 'R'),
-        ("ASN", 'N'),
-        ("ASP", 'D'),
-        ("CYS", 'C'),
-        ("GLN", 'Q'),
-        ("GLU", 'E'),
-        ("GLY", 'G'),
-        ("HIS", 'H'),
-        ("ILE", 'I'),
-        ("LEU", 'L'),
-        ("LYS", 'K'),
-        ("MET", 'M'),
-        ("PHE", 'F'),
-        ("PRO", 'P'),
-        ("SER", 'S'),
-        ("THR", 'T'),
-        ("TRP", 'W'),
-        ("TYR", 'Y'),
-        ("VAL", 'V'),
-        ("MSE", 'M'),
-        ("PCA", 'E'),
-    ];
-    AA.iter().find(|(n, _)| *n == name).map_or('X', |(_, c)| *c)
-}
-
-/// Polymer chains of a PDB file from their CA atoms (first altloc only).
-fn read_chains(path: &Path) -> Vec<Chain> {
-    let text = std::fs::read_to_string(path).unwrap_or_default();
-    let mut chains: BTreeMap<char, Vec<Residue>> = BTreeMap::new();
-    for line in text
-        .lines()
-        .filter(|l| l.len() > 26 && (l.starts_with("ATOM") || l.starts_with("HETATM")))
-    {
-        let (name, res) = (&line[12..16], &line[17..20]);
-        let hetero_ok = !line.starts_with("HETATM") || matches!(res, "MSE" | "PCA");
-        if name != " CA " || !hetero_ok || !matches!(line.as_bytes()[16], b' ' | b'A') {
-            continue;
-        }
-        let number: u16 = line[22..26].trim().parse().unwrap_or(0);
-        let label = match line.as_bytes()[26] {
-            b' ' => Label::new(number),
-            c => Label::with_insertion(number, c as char),
-        };
-        let chain = chains.entry(line.as_bytes()[21] as char).or_default();
-        if chain.last().is_none_or(|r| r.label != label) {
-            chain.push(Residue {
-                label,
-                aa: one_letter(res),
-            });
-        }
-    }
-    chains
-        .into_iter()
-        .map(|(id, residues)| Chain { id, residues })
-        .collect()
-}
-
-fn fixtures(dir: &str) -> Vec<(String, PathBuf)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/real")
-        .join(dir);
-    let mut files: Vec<(String, PathBuf)> = std::fs::read_dir(root)
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|e| e == "pdb"))
-                .map(|p| (p.file_stem().unwrap().to_string_lossy().to_string(), p))
-                .collect()
-        })
-        .unwrap_or_default();
-    files.sort();
-    files
-}
+mod antibody_common;
+use antibody_common::{fixtures, read_chains, Chain};
 
 fn matches(d: &Domain, scheme: Scheme, author: &[Label]) -> usize {
     d.numbering(scheme)
@@ -163,7 +64,7 @@ fn evaluate(dir: &str) -> Tally {
                 }
                 t.anchored += 1;
                 let scores = SCHEMES.map(|s| matches(&d, s, &author));
-                let best = scores.into_iter().max().unwrap_or(0);
+                let best = scores[..2].iter().copied().max().unwrap_or(0);
                 for (slot, m) in t.exact.iter_mut().zip(scores) {
                     *slot += usize::from(m == author.len());
                 }
@@ -185,7 +86,7 @@ fn print_tally(name: &str, t: &Tally) {
         t.chains, t.domains, t.anchored
     );
     println!(
-        "  exact: Kabat {} Chothia {} Martin {} any {} of {}",
+        "  exact: Kabat {} Chothia {} Martin {} Kabat or Chothia {} of {}",
         t.exact[0], t.exact[1], t.exact[2], t.exact_any, t.anchored
     );
     println!(
@@ -321,4 +222,56 @@ fn timing_10k_sequences() {
         elapsed.as_secs_f64(),
         elapsed.as_micros() as f64 / 10_000.0
     );
+}
+
+/// Author labels of the eleven FR4 residues (`98..` in Kabat numbering) of a
+/// lambda domain, as text.
+fn lambda_fr4_labels(d: &Domain, author: &[Label]) -> String {
+    let kabat = d.numbering(Scheme::Kabat);
+    let first = kabat.iter().position(|(_, l)| l.number == 98).unwrap_or(0);
+    author[first..]
+        .iter()
+        .take(11)
+        .map(Label::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[test]
+#[ignore = "prints the lambda FR4 convention counts; needs fixtures/real/holdout"]
+fn lambda_fr4_convention_report() {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, path) in fixtures("holdout") {
+        for chain in read_chains(&path) {
+            for d in find_domains(&chain.sequence()) {
+                let author = chain.author(&d);
+                if d.chain != ChainType::Lambda || !author_used_kabat_frame(&d, &author) {
+                    continue;
+                }
+                *counts.entry(lambda_fr4_labels(&d, &author)).or_default() += 1;
+            }
+        }
+    }
+    for (labels, n) in counts {
+        println!("{n:4}  {labels}");
+    }
+}
+
+#[test]
+#[ignore = "counts held-out domains numbered differently by Martin and Chothia"]
+fn martin_versus_chothia_report() {
+    let mut tally: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for (_, path) in fixtures("holdout") {
+        for chain in read_chains(&path) {
+            for d in find_domains(&chain.sequence()) {
+                let differs = d.numbering(Scheme::Martin) != d.numbering(Scheme::Chothia);
+                let slot = tally.entry(format!("{:?}", d.chain)).or_default();
+                slot.0 += 1;
+                slot.1 += usize::from(differs);
+            }
+        }
+    }
+    for (chain, (domains, differing)) in tally {
+        println!("{chain}: {differing} of {domains} domains differ");
+    }
 }

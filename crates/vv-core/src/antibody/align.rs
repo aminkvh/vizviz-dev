@@ -2,7 +2,7 @@
 //! states with affine gaps inside the framework, and free-length CDR loops
 //! between framework blocks priced by a length prior.
 
-use super::profile::{Profile, C23, LOOP_EXIT, N_COLS};
+use super::profile::{Profile, C23};
 
 const NEG: f32 = -1.0e9;
 const GAP_OPEN: f32 = 10.0;
@@ -11,7 +11,7 @@ const GAP_EXTEND: f32 = 2.0;
 /// Where an aligned residue sits in the profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Slot {
-    /// Framework column index (`0..N_COLS`).
+    /// Framework column index into the profile.
     Col(u8),
     /// Residue of CDR loop 0, 1 or 2.
     Loop(u8),
@@ -140,10 +140,11 @@ fn fill_column(q: &[u8], profile: &Profile, idx: usize, prev: Option<&Column>, c
 }
 
 fn fill(q: &[u8], profile: &Profile) -> Vec<Column> {
-    let mut cols: Vec<Column> = Vec::with_capacity(N_COLS);
-    for idx in 0..N_COLS {
+    let n_cols = profile.score.len();
+    let mut cols: Vec<Column> = Vec::with_capacity(n_cols);
+    for idx in 0..n_cols {
         let mut col = Column::new(q.len() + 1);
-        if let Some(loop_id) = LOOP_EXIT.iter().position(|&e| e == idx) {
+        if let Some(loop_id) = profile.loop_exit.iter().position(|&e| e == idx) {
             fill_loop_entry(&mut col, &cols[idx - 1], profile, loop_id);
         }
         fill_column(q, profile, idx, cols.last(), &mut col);
@@ -153,9 +154,9 @@ fn fill(q: &[u8], profile: &Profile) -> Vec<Column> {
 }
 
 /// Best alignment end: a match in FR4 or later.
-fn best_end(cols: &[Column]) -> Option<(usize, usize, f32)> {
+fn best_end(cols: &[Column], fr4_start: usize) -> Option<(usize, usize, f32)> {
     let mut best: Option<(usize, usize, f32)> = None;
-    for (idx, col) in cols.iter().enumerate().skip(LOOP_EXIT[2]) {
+    for (idx, col) in cols.iter().enumerate().skip(fr4_start) {
         for (row, &s) in col.m.iter().enumerate().skip(1) {
             if s > NEG / 2.0 && best.is_none_or(|(_, _, b)| s > b) {
                 best = Some((row, idx, s));
@@ -165,7 +166,13 @@ fn best_end(cols: &[Column]) -> Option<(usize, usize, f32)> {
     best
 }
 
-fn trace(cols: &[Column], mut row: usize, mut idx: usize, score: f32) -> Alignment {
+fn trace(
+    cols: &[Column],
+    profile: &Profile,
+    mut row: usize,
+    mut idx: usize,
+    score: f32,
+) -> Alignment {
     let mut slots = Vec::new();
     let mut in_delete = false;
     loop {
@@ -187,7 +194,8 @@ fn trace(cols: &[Column], mut row: usize, mut idx: usize, score: f32) -> Alignme
                 in_delete = matches!(from, From::Delete);
             }
             From::Loop => {
-                let loop_id = LOOP_EXIT
+                let loop_id = profile
+                    .loop_exit
                     .iter()
                     .position(|&e| e == idx)
                     .expect("loop entry column");
@@ -210,6 +218,6 @@ fn trace(cols: &[Column], mut row: usize, mut idx: usize, score: f32) -> Alignme
 
 pub(super) fn align(q: &[u8], profile: &Profile) -> Option<Alignment> {
     let cols = fill(q, profile);
-    let (row, idx, score) = best_end(&cols)?;
-    Some(trace(&cols, row, idx, score))
+    let (row, idx, score) = best_end(&cols, profile.loop_exit[2])?;
+    Some(trace(&cols, profile, row, idx, score))
 }

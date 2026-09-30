@@ -100,8 +100,13 @@ impl CdrDefinition {
     /// Inclusive CDR1, CDR2, CDR3 ranges in the native numbering.
     fn ranges(self, chain: ChainType) -> [Range; 3] {
         let heavy = chain == ChainType::Heavy;
+        let definition = if chain.is_antibody() {
+            self
+        } else {
+            CdrDefinition::Imgt
+        };
         let r = |a, b| (num(a), num(b));
-        match (self, heavy) {
+        match (definition, heavy) {
             (CdrDefinition::Kabat, true) => [(num(31), ins(35, 'B')), r(50, 65), r(95, 102)],
             (CdrDefinition::Chothia, true) => [r(26, 32), r(52, 56), r(95, 102)],
             (CdrDefinition::North, true) => [r(23, 35), r(50, 58), r(95, 102)],

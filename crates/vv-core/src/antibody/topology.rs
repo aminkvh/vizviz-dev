@@ -1,6 +1,8 @@
 //! Antibody domains of the protein chains of a [`Topology`].
 
+use std::fmt;
 use std::ops::Range;
+use std::sync::OnceLock;
 
 use rayon::prelude::*;
 
@@ -35,25 +37,67 @@ pub fn find_in_residues(top: &Topology, residues: Range<u32>) -> Vec<Domain> {
     find_domains(&seq)
 }
 
-/// Every CDR residue under `definition`, chain by chain (in parallel).
+/// Variable domains of every chain of a [`Topology`], found on first use.
+///
+/// A clone starts empty, so a topology edited after cloning never sees a
+/// stale answer; edit `chains` or `residues` in place only before the
+/// first query, or call [`AntibodyCache::clear`].
+#[derive(Default)]
+pub struct AntibodyCache(OnceLock<Vec<Vec<Domain>>>);
+
+impl AntibodyCache {
+    pub fn clear(&mut self) {
+        self.0 = OnceLock::new();
+    }
+}
+
+impl Clone for AntibodyCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl fmt::Debug for AntibodyCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self.0.get() {
+            Some(_) => "AntibodyCache(filled)",
+            None => "AntibodyCache(empty)",
+        })
+    }
+}
+
+/// Domains of each chain, by chain index, computed once per topology (in
+/// parallel) and shared by every later query.
+pub fn chain_domains(top: &Topology) -> &[Vec<Domain>] {
+    top.antibody.0.get_or_init(|| {
+        top.chains
+            .par_iter()
+            .map(|chain| find_in_residues(top, chain.residues.clone()))
+            .collect()
+    })
+}
+
+/// Every CDR residue under `definition`, chain by chain.
 pub fn cdr_residues(top: &Topology, definition: CdrDefinition) -> Vec<CdrResidue> {
+    let scheme = definition.native_scheme();
     top.chains
-        .par_iter()
-        .flat_map_iter(|chain| {
+        .iter()
+        .zip(chain_domains(top))
+        .flat_map(|(chain, domains)| {
             let first = chain.residues.start;
-            find_in_residues(top, chain.residues.clone())
-                .into_iter()
-                .flat_map(move |domain| {
-                    let notes = domain.annotate(definition.native_scheme(), definition);
-                    let kind = domain.chain;
-                    notes.into_iter().filter_map(move |a| {
+            domains.iter().flat_map(move |domain| {
+                let kind = domain.chain;
+                domain
+                    .annotate(scheme, definition)
+                    .into_iter()
+                    .filter_map(move |a| {
                         Some(CdrResidue {
                             residue: first + a.index as u32,
                             chain: kind,
                             cdr: a.region.cdr()?,
                         })
                     })
-                })
+            })
         })
         .collect()
 }

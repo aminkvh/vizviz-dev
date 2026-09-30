@@ -4,7 +4,6 @@
 use std::fmt;
 
 use super::align::Slot;
-use super::profile::column_number;
 use super::ChainType;
 
 /// A residue number and optional insertion letter, e.g. `52A`.
@@ -37,7 +36,7 @@ impl Label {
     }
 
     /// `k`-th insertion letter: `A`..`Z`, then `a`..`z`.
-    fn nth_insertion(number: u16, k: usize) -> Self {
+    pub(super) fn nth_insertion(number: u16, k: usize) -> Self {
         let letter = match k {
             0..=25 => b'A' + k as u8,
             26..=51 => b'a' + (k - 26) as u8,
@@ -63,10 +62,17 @@ pub enum Scheme {
     Kabat,
     Chothia,
     Martin,
+    Aho,
 }
 
 impl Scheme {
-    pub const ALL: [Scheme; 4] = [Scheme::Kabat, Scheme::Chothia, Scheme::Imgt, Scheme::Martin];
+    pub const ALL: [Scheme; 5] = [
+        Scheme::Kabat,
+        Scheme::Chothia,
+        Scheme::Imgt,
+        Scheme::Martin,
+        Scheme::Aho,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -74,6 +80,7 @@ impl Scheme {
             Scheme::Kabat => "Kabat",
             Scheme::Chothia => "Chothia",
             Scheme::Martin => "Martin",
+            Scheme::Aho => "AHo",
         }
     }
 
@@ -114,14 +121,15 @@ fn imgt_loop_labels(loop_id: usize, n: usize) -> Vec<Label> {
     out
 }
 
-/// IMGT label of every aligned residue, in sequence order.
-pub(super) fn imgt_labels(slots: &[Slot]) -> Vec<Label> {
+/// IMGT label of every aligned residue, in sequence order; `columns` labels
+/// the profile columns the slots index.
+pub(super) fn imgt_labels(slots: &[Slot], columns: &[Label]) -> Vec<Label> {
     let mut out = Vec::with_capacity(slots.len());
     let mut i = 0;
     while i < slots.len() {
         match slots[i] {
             Slot::Col(c) => {
-                out.push(Label::new(column_number(usize::from(c))));
+                out.push(columns[usize::from(c)]);
                 i += 1;
             }
             Slot::Loop(b) => {
@@ -171,20 +179,37 @@ const fn extra(col: u16, hi: u16, ins_after: u16) -> Span {
     var(col, hi, (0, 0), ins_after, &[])
 }
 
-const H1_DELETE: &[u16] = &[32, 33, 31, 34, 30, 35];
-const H2_DELETE: &[u16] = &[54, 53, 55, 52, 56, 51];
-const H3_DELETE: &[u16] = &[100, 99, 98, 97, 96, 95];
-const L1_DELETE: &[u16] = &[28, 29, 30, 27, 31];
-const L2_DELETE: &[u16] = &[54, 53, 55, 52];
-const L3_DELETE: &[u16] = &[95, 94, 96, 93];
+/// Labels a loop or framework stretch gives up first when shorter than its
+/// base run. Measured on structures numbered by each scheme's own authors
+/// (docs/ANTIBODY.md, "Deletion order"): the orders run away from the
+/// insertion site, except Kabat H1 and L1, which run from the loop's end.
+const H1_KABAT: &[u16] = &[35, 34, 33, 32, 31, 30, 29, 28, 27, 26];
+const H1_CHOTHIA: &[u16] = &[31, 30, 29, 28, 27, 26, 32, 33, 34, 35];
+const H2_DELETE: &[u16] = &[53, 54, 55, 56, 57, 58, 52, 51, 50];
+const H3_DELETE: &[u16] = &[100, 99, 98, 97, 96, 95, 94, 93];
+const L1_KABAT: &[u16] = &[28, 29, 30, 31, 27, 26, 25, 24];
+const L1_CHOTHIA: &[u16] = &[31, 32, 33, 34, 30, 29, 28, 27, 26, 25];
+const L1_MARTIN: &[u16] = &[30, 29, 28, 27, 26, 25, 31, 32, 33, 34];
+const L2_DELETE: &[u16] = &[54, 53, 55, 52, 56, 51, 50];
+const L2_MARTIN: &[u16] = &[52, 51, 50, 53, 54, 55, 56];
+const L3_DELETE: &[u16] = &[95, 94, 93, 92, 91, 90, 89];
+/// Martin heavy FR2 (Abhinandan & Martin 2008 name H42; the depositions
+/// measured here delete from H44).
+const H_FR2_MARTIN: &[u16] = &[44, 43, 42, 41, 40, 39, 38, 37, 36];
 
 fn heavy_spans(scheme: Scheme) -> Vec<Span> {
-    let h1_ins = if scheme == Scheme::Kabat { 35 } else { 31 };
+    if scheme == Scheme::Martin {
+        return martin_heavy_spans();
+    }
+    let (h1_ins, h1_delete) = match scheme {
+        Scheme::Kabat => (35, H1_KABAT),
+        _ => (31, H1_CHOTHIA),
+    };
     vec![
         fixed(1, 9, 0),
         extra(10, 10, 9),
         fixed(11, 26, -1),
-        var(27, 40, (26, 35), h1_ins, H1_DELETE),
+        var(27, 40, (26, 35), h1_ins, h1_delete),
         fixed(41, 54, -5),
         var(55, 74, (50, 65), 52, H2_DELETE),
         fixed(75, 91, -9),
@@ -195,18 +220,39 @@ fn heavy_spans(scheme: Scheme) -> Vec<Span> {
     ]
 }
 
+/// Chothia plus indel sites at the framework positions the scheme moves:
+/// H8, the FR2 deletion and the H72 insertion Kabat puts at H82.
+fn martin_heavy_spans() -> Vec<Span> {
+    vec![
+        fixed(1, 7, 0),
+        var(8, 10, (8, 9), 8, &[8]),
+        fixed(11, 26, -1),
+        var(27, 40, (26, 35), 31, H1_CHOTHIA),
+        var(41, 54, (36, 49), 49, H_FR2_MARTIN),
+        var(55, 74, (50, 65), 52, H2_DELETE),
+        var(75, 104, (66, 92), 72, &[]),
+        var(105, 117, (93, 102), 100, H3_DELETE),
+        fixed(118, 128, -15),
+    ]
+}
+
 fn light_spans(scheme: Scheme, lambda: bool) -> Vec<Span> {
-    let l1_ins = if scheme == Scheme::Kabat { 27 } else { 30 };
-    let l2_ins = if scheme == Scheme::Martin { 52 } else { 54 };
+    if scheme == Scheme::Martin {
+        return martin_light_spans(lambda);
+    }
+    let (l1_ins, l1_delete) = match scheme {
+        Scheme::Kabat => (27, L1_KABAT),
+        _ => (30, L1_CHOTHIA),
+    };
     let mut spans = if lambda {
         vec![fixed(1, 9, 0), extra(10, 10, 9), fixed(11, 23, 0)]
     } else {
         vec![fixed(1, 23, 0)]
     };
     spans.extend([
-        var(24, 40, (24, 34), l1_ins, L1_DELETE),
+        var(24, 40, (24, 34), l1_ins, l1_delete),
         fixed(41, 55, -6),
-        var(56, 69, (50, 56), l2_ins, L2_DELETE),
+        var(56, 69, (50, 56), 54, L2_DELETE),
         fixed(70, 72, -13),
         extra(73, 73, 59),
         fixed(74, 80, -14),
@@ -214,16 +260,37 @@ fn light_spans(scheme: Scheme, lambda: bool) -> Vec<Span> {
         fixed(83, 104, -16),
         var(105, 117, (89, 97), 95, L3_DELETE),
     ]);
-    spans.extend(if lambda {
-        vec![
+    spans.extend(lambda_fr4(lambda));
+    spans
+}
+
+/// Chothia plus the indel sites at L7 (lambda FR1), L40A/L41, L68 and
+/// the shifted L1 and L2 deletions.
+fn martin_light_spans(lambda: bool) -> Vec<Span> {
+    let mut spans = vec![
+        fixed(1, 6, 0),
+        var(7, 10, (7, 10), 10, &[7]),
+        fixed(11, 23, 0),
+        var(24, 40, (24, 34), 30, L1_MARTIN),
+        var(41, 55, (35, 49), 40, &[41]),
+        var(56, 69, (50, 56), 52, L2_MARTIN),
+        var(70, 104, (57, 88), 68, &[68]),
+        var(105, 117, (89, 97), 95, L3_DELETE),
+    ];
+    spans.extend(lambda_fr4(lambda));
+    spans
+}
+
+/// Kabat's lambda FR4 carries 106A; kappa runs straight through.
+fn lambda_fr4(lambda: bool) -> Vec<Span> {
+    match lambda {
+        true => vec![
             fixed(118, 126, -20),
             extra(127, 127, 106),
             fixed(128, 128, -21),
-        ]
-    } else {
-        vec![fixed(118, 128, -20)]
-    });
-    spans
+        ],
+        false => vec![fixed(118, 128, -20)],
+    }
 }
 
 fn spans(scheme: Scheme, chain: ChainType) -> Vec<Span> {
@@ -231,6 +298,7 @@ fn spans(scheme: Scheme, chain: ChainType) -> Vec<Span> {
         ChainType::Heavy => heavy_spans(scheme),
         ChainType::Kappa => light_spans(scheme, false),
         ChainType::Lambda => light_spans(scheme, true),
+        ChainType::TcrAlpha | ChainType::TcrBeta => Vec::new(),
     }
 }
 
@@ -277,8 +345,11 @@ fn span_of(spans: &[Span], number: u16) -> usize {
 
 /// Relabels residues (given by their IMGT labels) in a non-IMGT scheme.
 pub(super) fn relabel(scheme: Scheme, chain: ChainType, imgt: &[Label]) -> Vec<Label> {
-    if scheme == Scheme::Imgt {
-        return imgt.to_vec();
+    match scheme {
+        Scheme::Aho if chain.is_antibody() => return super::aho::relabel(chain, imgt),
+        Scheme::Imgt | Scheme::Aho => return imgt.to_vec(),
+        _ if !chain.is_antibody() => return imgt.to_vec(),
+        _ => {}
     }
     let spans = spans(scheme, chain);
     let mut out = Vec::with_capacity(imgt.len());

@@ -7,6 +7,7 @@ use std::ops::Range;
 
 use glam::Vec3;
 
+use crate::antibody::AntibodyCache;
 use crate::residue_class::{self, ClassCounts, PolymerHint, ResidueClass, Roles};
 use crate::{Annotations, BondOrder, BondTable, Element, InternId, Interner};
 
@@ -120,6 +121,8 @@ pub struct Topology {
     pub id: String,
     /// Header metadata the file carried (method, resolution, citation, ...).
     pub annotations: Annotations,
+    /// Antibody domains per chain, found on first query.
+    pub antibody: AntibodyCache,
 }
 
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
