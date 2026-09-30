@@ -50,7 +50,7 @@ impl PolytopeMesh {
         self.positions.len() / 3
     }
 
-    fn tri(&mut self, a: Vec3, b: Vec3, c: Vec3, color: [u8; 3], atom: u32) {
+    pub(crate) fn tri(&mut self, a: Vec3, b: Vec3, c: Vec3, color: [u8; 3], atom: u32) {
         let n = (b - a).cross(c - a).normalize_or_zero();
         for p in [a, b, c] {
             self.positions.push(p);

@@ -106,6 +106,9 @@ pub struct SavedStructure {
     /// Measurements on screen, as their atoms.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub measurements: Vec<Vec<u32>>,
+    /// Contact overlays on (`InteractionKind::name`s).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub interactions: Vec<String>,
     /// `LoadedStructure::frame` — absent (so `0`) in a file saved before
     /// frame became document state; see the module doc.
     #[serde(default)]
@@ -351,6 +354,11 @@ pub fn capture(
                 .measurements
                 .iter()
                 .map(|m| m.atoms().to_vec())
+                .collect(),
+            interactions: loaded
+                .interactions
+                .iter()
+                .map(|k| k.name().to_string())
                 .collect(),
             frame: loaded.frame,
             labels: loaded.labels.clone(),
@@ -630,6 +638,17 @@ pub fn apply(file: &SessionFile, scene: &mut Scene, history: &mut CommandHistory
                     });
                 if let Err(e) = shown {
                     out.warnings.push(format!("{}: measurement: {e}", s.label));
+                }
+            }
+            for name in &s.interactions {
+                match vv_core::interactions::InteractionKind::parse(name) {
+                    Some(kind) => {
+                        let _ =
+                            history.dispatch(scene, Command::SetInteraction { id, kind, on: true });
+                    }
+                    None => out
+                        .warnings
+                        .push(format!("{}: unknown interaction `{name}`", s.label)),
                 }
             }
             for (&atom, text) in &s.labels {
@@ -1184,6 +1203,7 @@ END
                     material: String::new(),
                     values: Vec::new(),
                     measurements: Vec::new(),
+                    interactions: Vec::new(),
                     frame: 0,
                     labels: Default::default(),
                 },
@@ -1200,6 +1220,7 @@ END
                     material: String::new(),
                     values: Vec::new(),
                     measurements: Vec::new(),
+                    interactions: Vec::new(),
                     frame: 0,
                     labels: Default::default(),
                 },

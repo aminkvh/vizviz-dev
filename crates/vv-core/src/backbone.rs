@@ -47,7 +47,7 @@ pub struct Tube {
     pub bonds: Vec<[u32; 2]>,
 }
 
-fn trace_atom(topology: &Topology, residue: usize) -> Option<(u32, ResidueClass)> {
+pub(crate) fn trace_atom(topology: &Topology, residue: usize) -> Option<(u32, ResidueClass)> {
     let rec = &topology.residues[residue];
     let kind = topology.residue_class(residue);
     let wanted: &[&str] = match kind {

@@ -19,9 +19,17 @@
 //! multi-million-atom structures, so their CPU halves run on a worker
 //! thread (`Job`) and the window is woken to upload them.
 
+pub(crate) mod bases;
+pub(crate) mod companions;
+pub(crate) mod interactions;
+
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Arc;
+
+use bases::Bases;
+use companions::Companions;
+use interactions::Overlay;
 
 use glam::Vec3;
 use rayon::prelude::*;
@@ -238,26 +246,6 @@ impl DrawSource {
             .and_then(|m| m.get(local as usize).copied())
             .unwrap_or(local)
     }
-}
-
-/// The atoms drawn as sticks alongside a tube: everything that is neither
-/// polymer (the tube stands for it) nor water. Returns the kept atom
-/// indices and their bonds, re-indexed into that list, plus each kept
-/// bond's real atom pair.
-pub fn ligand_subset(structure: &Structure, bonds: &[[u32; 2]]) -> LigandSubset {
-    let t = &structure.topology;
-    let mut keep = vec![false; t.atom_count()];
-    for (r, rec) in t.residues.iter().enumerate() {
-        if !matches!(
-            t.residue_class(r),
-            ResidueClass::Protein | ResidueClass::Nucleic | ResidueClass::Water
-        ) {
-            for a in rec.atoms.clone() {
-                keep[a as usize] = true;
-            }
-        }
-    }
-    subset_of(&keep, bonds)
 }
 
 /// The atoms `keep` marks, in order, and the bonds between two of them:
@@ -578,8 +566,7 @@ struct TubeGeometry {
     /// their radii: fixed, like `plan`'s.
     caps: Option<Derived>,
     cap_radii: Vec<f32>,
-    /// `None` when there are no ligands to show.
-    ligand: Option<Derived>,
+    companions: Companions,
 }
 
 /// A tube rep's per-atom radius (`vv_core::backbone::putty_radius`):
@@ -612,26 +599,6 @@ fn tube_radius_fn<'a>(
         }
         let b = topology.b_factor.get(a as usize).copied().unwrap_or(0.0);
         vv_core::backbone::putty_radius(b, b_range, (radius_min, thick))
-    }
-}
-
-/// The non-polymer atoms `keep` accepts (`ligand_subset`), further kept
-/// to `keep`: drawn as ball-and-stick alongside a tube.
-pub(crate) fn tube_ligands(
-    structure: &Structure,
-    bonds: &[[u32; 2]],
-    keep: &Option<Vec<bool>>,
-) -> LigandSubset {
-    let ligands = ligand_subset(structure, bonds);
-    match keep {
-        None => ligands,
-        Some(keep) => {
-            let mut both = vec![false; keep.len()];
-            for &a in &ligands.atoms {
-                both[a as usize] = keep[a as usize];
-            }
-            subset_of(&both, bonds)
-        }
     }
 }
 
@@ -722,7 +689,7 @@ fn build_tube(
     keep: Option<Vec<bool>>,
     all_colors: &[u32],
     frame: usize,
-    strand_input: Option<StrandInput>,
+    adjacency: Option<&vv_core::Adjacency>,
 ) -> Result<TubeGeometry, OutOfGpuMemory> {
     let structure = &loaded.structure;
     let (plan, spline) = tube_mesh(loaded, rep, &keep, frame);
@@ -730,25 +697,16 @@ fn build_tube(
     let bindings = renderer.bind_cartoon(&gpu);
     let ends = plan.mesh(&spline).loose_ends();
     let (caps, cap_radii) = build_tube_caps(ctx, renderer, structure, frame, &ends, all_colors);
-    let ligands = tube_ligands(structure, &loaded.bonds.pairs, &keep);
-    let ligand = (!ligands.atoms.is_empty()).then(|| {
-        Derived::atoms(
-            ctx,
-            renderer,
-            structure,
-            frame,
-            ligands,
-            all_colors,
-            strand_input,
-        )
-    });
+    let companions = Companions::build(
+        ctx, renderer, loaded, rep, &keep, frame, all_colors, adjacency,
+    );
     Ok(TubeGeometry {
         plan,
         gpu,
         bindings,
         caps,
         cap_radii,
-        ligand,
+        companions,
     })
 }
 
@@ -767,9 +725,7 @@ impl TubeGeometry {
                 .collect();
             caps.gpu.set_instances(ctx, &pos, &self.cap_radii);
         }
-        if let Some(l) = &self.ligand {
-            l.set_frame(ctx, structure, frame);
-        }
+        self.companions.set_frame(ctx, structure, frame);
     }
 }
 
@@ -934,8 +890,8 @@ struct CartoonEntry {
     /// (frame) it shows.
     from: Arc<CartoonPlan>,
     spline: Arc<CartoonFrame>,
-    /// Nucleotides' rungs, backbone to base (`vv_core::nucleic_ladder`).
-    ladder: Option<Derived>,
+    bases: Bases,
+    companions: Companions,
 }
 
 /// A glycan rep's SNFG shapes and linkage cylinders: unlike a cartoon,
@@ -965,45 +921,6 @@ struct CartoonModel {
     planned_at: usize,
     spline: Arc<CartoonFrame>,
     spline_at: usize,
-}
-
-/// The rungs of the nucleotides `keep` accepts, on the shown conformers.
-fn ladder_rungs(loaded: &LoadedStructure, keep: &Option<Vec<bool>>) -> Vec<[u32; 2]> {
-    let rungs = loaded.as_shown(&vv_core::nucleic_ladder(&loaded.structure.topology));
-    rungs
-        .into_iter()
-        .filter(|[a, b]| {
-            keep.as_ref()
-                .is_none_or(|k| k[*a as usize] && k[*b as usize])
-        })
-        .collect()
-}
-
-/// The rungs of the nucleotides `keep` accepts, as sticks.
-fn build_ladder(
-    ctx: &GpuContext,
-    renderer: &Renderer,
-    loaded: &LoadedStructure,
-    keep: &Option<Vec<bool>>,
-    frame: usize,
-    all_colors: &[u32],
-) -> Option<Derived> {
-    let structure = &loaded.structure;
-    let rungs = ladder_rungs(loaded, keep);
-    if rungs.is_empty() {
-        return None;
-    }
-    let mut ends = vec![false; structure.atom_count()];
-    for [a, b] in &rungs {
-        ends[*a as usize] = true;
-        ends[*b as usize] = true;
-    }
-    let subset = subset_of(&ends, &rungs);
-    // Rungs are synthetic (hydrogen-bond pairing, not covalent), never in
-    // the structure's own `BondTable`: no strand splitting applies.
-    Some(Derived::atoms(
-        ctx, renderer, structure, frame, subset, all_colors, None,
-    ))
 }
 
 /// A rep's atoms: all of them (`None`), or the listed ones.
@@ -1170,7 +1087,27 @@ struct Entry {
     /// The whole structure's cartoon, and its plan being built.
     cartoon: Option<CartoonModel>,
     cartoon_job: Option<Job<(CartoonPlan, CartoonFrame)>>,
+    /// The contact dashes, when any overlay is on.
+    overlay: Option<Overlay>,
     reps: HashMap<RepId, RepEntry>,
+}
+
+/// The structure's bond adjacency, built on first use and shared by every
+/// rep; `None` when every bond is `Single` (no strand needs it).
+fn adjacency_of(
+    cached: &mut Option<Arc<vv_core::Adjacency>>,
+    loaded: &LoadedStructure,
+) -> Option<Arc<vv_core::Adjacency>> {
+    (!loaded.bonds.orders.is_empty()).then(|| {
+        cached
+            .get_or_insert_with(|| {
+                Arc::new(vv_core::adjacency(
+                    &loaded.bonds,
+                    loaded.structure.atom_count(),
+                ))
+            })
+            .clone()
+    })
 }
 
 /// Whether a selection depends on coordinates, so it is re-evaluated when
@@ -1302,15 +1239,7 @@ fn occlusion_proxies(
                         .map(|(&a, &r)| (positions[a as usize], r)),
                 );
             }
-            if let Some(l) = &t.ligand {
-                let scale = GpuRepresentation::BallAndStick.radius_scale();
-                out.extend(l.atom_map.iter().map(|&a| {
-                    (
-                        positions[a as usize],
-                        elements[a as usize].vdw_radius() * scale,
-                    )
-                }));
-            }
+            t.companions.proxies(positions, elements, out);
         }
         RepGeometry::Cartoon(c) => {
             // One sphere per residue on the spline, as wide as a ribbon.
@@ -1324,10 +1253,16 @@ fn occlusion_proxies(
                     .filter(|(&a, _)| keep.as_ref().is_none_or(|k| k[a as usize]))
                     .map(|(_, &p)| (p, radius)),
             );
-            if let Some(l) = &c.ladder {
-                let radius = GpuRepresentation::Sticks.atom_radius(0.0);
-                out.extend(l.atom_map.iter().map(|&a| (positions[a as usize], radius)));
+            if let Some(sticks) = c.bases.sticks() {
+                let radius = bases::stick_sizes().atom_radius(0.0);
+                out.extend(
+                    sticks
+                        .atom_map
+                        .iter()
+                        .map(|&a| (positions[a as usize], radius)),
+                );
             }
+            c.companions.proxies(positions, elements, out);
         }
         RepGeometry::Glycan(g) => {
             // One sphere per shape, at its ring centroid.
@@ -1523,6 +1458,7 @@ impl GpuCache {
                 altloc: loaded.altloc,
                 cartoon: None,
                 cartoon_job: None,
+                overlay: None,
                 reps: HashMap::new(),
             });
             let frame = sync_frame(loaded.visible, entry.frame, live_frame);
@@ -1531,6 +1467,7 @@ impl GpuCache {
             for rep in loaded.reps.iter().filter(|r| r.visible) {
                 self.sync_rep(entry, loaded, rep, frame, playing, ctx, renderer, &waker);
             }
+            Overlay::sync(&mut entry.overlay, ctx, renderer, loaded, frame);
             // The shared atoms move only while a visible rep draws them (a
             // playing cartoon would otherwise re-upload every atom too).
             let drawn = loaded.reps.iter().filter(|r| r.visible).any(|rep| {
@@ -1829,22 +1766,7 @@ impl GpuCache {
                 }
                 _ => {
                     let keep = keep_mask(&r.atoms, structure.atom_count());
-                    // The ligand sticks always draw as `BallAndStick`
-                    // (`draw_items`), regardless of the tube rep's own
-                    // style, so that style's bond radius is what its
-                    // strand separation scales from, too.
-                    let sticks_bond_radius =
-                        AtomSizes::of(GpuRepresentation::BallAndStick).bond_radius;
-                    let strand_input = (!loaded.bonds.orders.is_empty()).then(|| {
-                        let adjacency = entry.adjacency.get_or_insert_with(|| {
-                            Arc::new(vv_core::adjacency(&loaded.bonds, structure.atom_count()))
-                        });
-                        StrandInput {
-                            bonds: &loaded.bonds,
-                            adjacency,
-                            separation: sticks_bond_radius * STRAND_SEPARATION_SCALE,
-                        }
-                    });
+                    let adjacency = adjacency_of(&mut entry.adjacency, loaded);
                     match build_tube(
                         ctx,
                         renderer,
@@ -1853,7 +1775,7 @@ impl GpuCache {
                         keep,
                         &colors(),
                         frame,
-                        strand_input,
+                        adjacency.as_deref(),
                     ) {
                         Ok(geometry) => r.geometry = RepGeometry::Tube(geometry),
                         Err(OutOfGpuMemory) => {
@@ -1870,12 +1792,24 @@ impl GpuCache {
                 };
                 if let RepGeometry::Cartoon(c) = &mut r.geometry {
                     if Arc::ptr_eq(&c.from, &model.plan) && !recolor {
-                        // Same plan: move the spline (and the rungs).
+                        // Same plan: move the spline, bases and companions.
                         if !Arc::ptr_eq(&c.spline, &model.spline) {
                             c.gpu.set_frame(ctx, &model.spline);
                             c.spline = model.spline.clone();
-                            if let Some(l) = &c.ladder {
-                                l.set_frame(ctx, structure, frame);
+                            c.companions.set_frame(ctx, structure, frame);
+                            let keep = keep_mask(&r.atoms, structure.atom_count());
+                            let style = bases::BaseStyle::of(rep);
+                            match Bases::build(
+                                ctx,
+                                renderer,
+                                loaded,
+                                &keep,
+                                frame,
+                                &colors(),
+                                style,
+                            ) {
+                                Ok(bases) => c.bases = bases,
+                                Err(OutOfGpuMemory) => c.bases = Bases::default(),
                             }
                         }
                         r.colors = colors_key;
@@ -1883,29 +1817,45 @@ impl GpuCache {
                         return;
                     }
                 }
-                {
-                    let keep = keep_mask(&r.atoms, structure.atom_count());
-                    let filtered = match &loaded.trace_keep(&keep) {
-                        None => (*model.plan).clone(),
-                        Some(keep) => model.plan.filter(|a| keep[a as usize]),
-                    };
-                    let all = colors();
-                    match CartoonGpu::upload(ctx, &filtered, &model.spline, &all) {
-                        Ok(gpu) => {
-                            let bindings = renderer.bind_cartoon(&gpu);
-                            r.geometry = RepGeometry::Cartoon(CartoonEntry {
-                                gpu,
-                                bindings,
-                                from: model.plan.clone(),
-                                spline: model.spline.clone(),
-                                ladder: build_ladder(ctx, renderer, loaded, &keep, frame, &all),
-                            });
-                        }
-                        Err(OutOfGpuMemory) => {
-                            r.geometry = RepGeometry::Pending;
-                            r.failed = true;
-                            self.messages.push(oom_notice("cartoon", &loaded.label));
-                        }
+                let keep = keep_mask(&r.atoms, structure.atom_count());
+                let filtered = match &loaded.trace_keep(&keep) {
+                    None => (*model.plan).clone(),
+                    Some(keep) => model.plan.filter(|a| keep[a as usize]),
+                };
+                let all = colors();
+                let adjacency = adjacency_of(&mut entry.adjacency, loaded);
+                let built =
+                    CartoonGpu::upload(ctx, &filtered, &model.spline, &all).and_then(|gpu| {
+                        let style = bases::BaseStyle::of(rep);
+                        let bases = Bases::build(ctx, renderer, loaded, &keep, frame, &all, style)?;
+                        Ok((gpu, bases))
+                    });
+                match built {
+                    Ok((gpu, bases)) => {
+                        let bindings = renderer.bind_cartoon(&gpu);
+                        let companions = Companions::build(
+                            ctx,
+                            renderer,
+                            loaded,
+                            rep,
+                            &keep,
+                            frame,
+                            &all,
+                            adjacency.as_deref(),
+                        );
+                        r.geometry = RepGeometry::Cartoon(CartoonEntry {
+                            gpu,
+                            bindings,
+                            from: model.plan.clone(),
+                            spline: model.spline.clone(),
+                            bases,
+                            companions,
+                        });
+                    }
+                    Err(OutOfGpuMemory) => {
+                        r.geometry = RepGeometry::Pending;
+                        r.failed = true;
+                        self.messages.push(oom_notice("cartoon", &loaded.label));
                     }
                 }
             }
@@ -2339,9 +2289,8 @@ impl GpuCache {
                                 AtomSizes::of(GpuRepresentation::Spacefill),
                             );
                         }
-                        if let Some(l) = &t.ligand {
-                            let sticks = GpuRepresentation::BallAndStick;
-                            derived(l, sticks, AtomSizes::of(sticks));
+                        for (d, representation, sizes) in t.companions.draw() {
+                            derived(d, representation, sizes);
                         }
                     }
                     RepGeometry::Cartoon(c) => {
@@ -2358,9 +2307,24 @@ impl GpuCache {
                                 material,
                             });
                         }
-                        if let Some(l) = &c.ladder {
-                            let sticks = GpuRepresentation::Sticks;
-                            derived(l, sticks, AtomSizes::of(sticks));
+                        if let Some((plates, bindings)) = c.bases.plates() {
+                            cartoon_sources.push(DrawSource {
+                                id,
+                                rep: rep.id,
+                                atom_map: Some(plates.source.clone()),
+                                bond_atoms: None,
+                            });
+                            cartoons.push(CartoonItem {
+                                mesh: vv_render::CartoonMesh::Glycan(plates),
+                                bindings,
+                                material,
+                            });
+                        }
+                        if let Some(sticks) = c.bases.sticks() {
+                            derived(sticks, GpuRepresentation::Sticks, bases::stick_sizes());
+                        }
+                        for (d, representation, sizes) in c.companions.draw() {
+                            derived(d, representation, sizes);
                         }
                     }
                     RepGeometry::Glycan(g) if g.gpu.vertex_count > 0 => {
@@ -2411,6 +2375,11 @@ impl GpuCache {
                         });
                     }
                 }
+            }
+            if let Some(overlay) = &entry.overlay {
+                let (source, item) = overlay.draw(id);
+                sources.push(source);
+                items.push(item);
             }
         }
         sources.extend(cartoon_sources);
@@ -2562,7 +2531,7 @@ mod tests {
     fn a_ladder_rung_uses_the_shown_conformer_of_a_split_base() {
         let (scene, id) = dna_with_split_atoms();
         let loaded = scene.structure(id).unwrap();
-        let rungs = ladder_rungs(loaded, &all_keep(loaded));
+        let rungs = bases::stick_rungs(loaded, &all_keep(loaded));
         assert_eq!(rungs, vec![[1, 4], [5, 7]]);
         let x = loaded.structure.frame(0).positions()[rungs[0][1] as usize].x;
         assert_eq!(x, 3.0, "the hidden N1 at 91 is not used");
@@ -2733,19 +2702,50 @@ mod tests {
     }
 
     #[test]
-    fn ligand_subset_keeps_hemes_drops_protein_and_water_and_remaps_bonds() {
+    fn companions_of_a_cartoon_are_hemes_only_until_additives_and_water_are_asked_for() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/small/4HHB.cif");
         let structure = vv_io::load(path).unwrap();
         let bonds = vv_core::bonds::perceive(&structure.topology, structure.frame(0).positions());
-        let subset = ligand_subset(&structure, &bonds.pairs);
         let t = &structure.topology;
-        // 4 hemes (43 atoms each) + 2 phosphate atoms; no HOH, no protein.
-        assert_eq!(subset.atoms.len(), 4 * 43 + 2);
-        for &a in &subset.atoms {
-            let name = t.residue_name(t.residue_index[a as usize] as usize);
-            assert!(matches!(name, "HEM" | "PO4"), "{name}");
-        }
+        let mut rep = Rep::new(RepId(0), SceneRepresentation::Cartoon);
+        let names_of = |rep: &Rep| -> Vec<(vv_core::Companion, Vec<String>)> {
+            companions::subsets(&structure, &bonds.pairs, rep, &None)
+                .into_iter()
+                .map(|(kind, s)| {
+                    let mut names: Vec<String> = s
+                        .atoms
+                        .iter()
+                        .map(|&a| t.residue_name(t.residue_index[a as usize] as usize).into())
+                        .collect();
+                    names.dedup();
+                    (kind, names)
+                })
+                .collect()
+        };
+        let found = names_of(&rep);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            found[0],
+            (vv_core::Companion::Ligand, vec!["HEM".to_string()])
+        );
+        rep.options.insert("additives".into(), 1.0);
+        rep.options.insert("water".into(), 1.0);
+        let kinds: Vec<_> = names_of(&rep).into_iter().map(|(k, _)| k).collect();
+        assert!(kinds.contains(&vv_core::Companion::Additive));
+        assert!(kinds.contains(&vv_core::Companion::Water));
+        rep.options.insert("ligands".into(), 0.0);
+        assert!(!names_of(&rep)
+            .iter()
+            .any(|(k, _)| *k == vv_core::Companion::Ligand));
+        rep.options.insert("ligands".into(), 1.0);
+        let subset = companions::subsets(&structure, &bonds.pairs, &rep, &None)
+            .into_iter()
+            .find(|(k, _)| *k == vv_core::Companion::Ligand)
+            .unwrap()
+            .1;
+        // 4 hemes of 43 atoms each.
+        assert_eq!(subset.atoms.len(), 4 * 43);
         assert!(
             subset.local_bonds.len() > 4 * 40,
             "{}",

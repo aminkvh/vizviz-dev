@@ -229,9 +229,9 @@ no end caps (`vv_core::cartoon`'s scope, shared with the ribbon); a tube
 closes each chain end, break or selection cut with a plain sphere at that
 end's own radius (`CartoonMesh::loose_ends`), cheap because a Catmull-Rom
 spline passes exactly through its control points, so the end section's
-center already equals the end atom's own position. Ligands and ions
-(residues that are neither polymer nor water) go up as a second
-`GpuStructure` drawn ball-and-stick; water is not drawn. Picking maps
+center already equals the end atom's own position. The non-polymer
+content goes up beside it as described under "Cartoon and tube scene
+composition" below. Picking maps
 back to real atoms the same way a cartoon does (each mesh section
 remembers its nearest trace atom), so picking anywhere on the tube
 selects that residue's CA and picking a heme stick selects the heme
@@ -241,6 +241,49 @@ only re-evaluates the spline, never rebuilds the mesh, so the section
 count under the GPU buffers never changes. Helices and strands are not
 drawn as ribbons or arrows for Tube: that is the Cartoon representation,
 which needs validated secondary-structure assignment (docs/VALIDATION.md).
+
+## Cartoon and tube scene composition
+
+A cartoon or tube also draws what a reader expects beside the polymer,
+decided per residue from its class and roles (`vv_core::companion`,
+`vv_core::residue_class`) and limited to the rep's selection. Defaults
+(each a `repopt` on/off choice):
+
+| Content | Default | Drawn as |
+| --- | --- | --- |
+| ligands, cofactors (`ligands`) | on | ball-and-stick |
+| ions (`ions`) | on | spheres at half van der Waals radius |
+| glycans (`glycans`) | on | thin sticks |
+| lipids (`lipids`) | on | bound: thin sticks; membrane: lines |
+| water (`water`) | off | ball-and-stick |
+| crystallization additives (`additives`) | off | ball-and-stick |
+
+Each kind is its own piece of geometry (`gpu_cache/companions.rs`), so
+picking, selection outlines, transparency, the occlusion volume and the
+path tracer treat it like any other atoms.
+
+A cartoon draws each nucleotide's base (`bases`, `gpu_cache/bases.rs`,
+`vv_core::bases`). `plate` (default) is a slab on the base's real ring
+atoms (nine for a purine, six for a pyrimidine, fan-triangulated from
+the ring centroid, 0.4 A thick), with sticks from the backbone trace atom
+to C1' and on to the glycosidic atom; it goes through the glycan mesh
+path, so a pick on a plate names a ring atom. `ladder` draws the same
+stems and one rung per base pair, C1' to C1' in the two bases' colours.
+Pairs are found geometrically: a purine and a pyrimidine whose N1 and N3
+are within 3.4 A (or with the wobble contacts N1-O2 and O6-N3), rings
+within 40 degrees of parallel and 2 A of co-planar; each base pairs at
+most once. `stick` is the older single stick to the pairing atom. Slabs
+take their colour from the rep's coloring at the glycosidic atom, so
+`color nucleotide` gives the usual per-base colours.
+
+## Interaction overlay
+
+`interactions hbond|metal|saltbridge on|off` (`vv_core::interactions`,
+`gpu_cache/interactions.rs`) draws each contact as a run of short
+cylinders through the ball-and-stick pipeline, so the dashes are
+depth-tested and reach path-traced renders. Metal cutoffs are the typical
+bond length of each metal (Harding 2006, Acta Cryst D62:678) plus about
+0.5 A, a project rounding rather than a table from the paper.
 
 ## Transparency
 

@@ -1675,6 +1675,10 @@ mod tests {
         ("window", "sets the window size for scripted layout checks"),
         ("repopt", "a Selections row's ⋯ ▸ Options…"),
         (
+            "interactions",
+            "console only until the Analyze tab gets its switches",
+        ),
+        (
             "ribbon",
             "the ribbon's own tabs and chevron are its clickable form",
         ),

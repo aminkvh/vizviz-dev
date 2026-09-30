@@ -9,11 +9,11 @@ use std::time::Instant;
 
 use glam::Vec3;
 use vv_render::path_trace::{PathTracer, TraceScene, TraceSettings};
-use vv_render::{Camera, GpuContext, Representation as GpuRepresentation};
+use vv_render::{Camera, GpuContext};
 use vv_scene::{LoadedStructure, Representation, Scene};
 
 use crate::gpu_cache::{
-    atom_arrays, colors_of, keep_mask, rep_sizes, select_atoms, skin_weights, tube_ligands,
+    atom_arrays, bases, colors_of, companions, keep_mask, rep_sizes, select_atoms, skin_weights,
     tube_mesh_with_density, without_water, Atoms, GpuCache, Waker, SKIN_MAX_ATOMS,
 };
 
@@ -216,11 +216,30 @@ pub fn trace_scene(scene: &Scene, cache: &GpuCache, quality: Quality) -> TraceIn
                     continue;
                 };
                 let dense = plan.redensify(quality.samples_per_residue());
-                let mesh = match loaded.trace_keep(&keep_mask(&atoms, n)) {
+                let keep = keep_mask(&atoms, n);
+                let mesh = match loaded.trace_keep(&keep) {
                     None => dense.mesh(&spline),
                     Some(keep) => dense.filter(|a| keep[a as usize]).mesh(&spline),
                 };
                 traced.push_mesh(&mesh.expand_with_ring(quality.ring()), &colors, material);
+                bases::push_traced(
+                    &mut traced,
+                    loaded,
+                    &keep,
+                    frame,
+                    &colors,
+                    bases::BaseStyle::of(rep),
+                    material,
+                );
+                companions::push_traced(
+                    &mut traced,
+                    loaded,
+                    rep,
+                    &keep,
+                    positions,
+                    &colors,
+                    material,
+                );
                 continue;
             }
             if matches!(
@@ -351,6 +370,7 @@ pub fn trace_scene(scene: &Scene, cache: &GpuCache, quality: Quality) -> TraceIn
                 material_index,
             );
         }
+        crate::gpu_cache::interactions::push_traced(&mut traced, loaded, frame);
     }
     TraceInput {
         scene: traced,
@@ -434,23 +454,14 @@ fn push_tube(
         );
     }
 
-    let ligands = tube_ligands(&loaded.structure, &loaded.bonds.pairs, &keep);
     let coords = loaded.structure.frame(frame);
-    let sticks = GpuRepresentation::BallAndStick;
-    let radii: Vec<f32> = loaded
-        .structure
-        .topology
-        .element
-        .iter()
-        .map(|e| sticks.atom_radius(e.vdw_radius()))
-        .collect();
-    traced.push_atoms(
+    companions::push_traced(
+        traced,
+        loaded,
+        rep,
+        &keep,
         coords.positions(),
-        &radii,
         colors,
-        ligands.atoms.iter().map(|&a| a as usize),
-        ligands.real_pairs.iter().copied(),
-        sticks.bond_radius(),
         material,
     );
 }

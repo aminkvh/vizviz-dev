@@ -239,6 +239,13 @@ pub enum Command {
         measurement: Measurement,
         shown: bool,
     },
+    /// Turns a contact overlay (`vv_core::interactions`) on or off for
+    /// structure `id`. Undo puts back the previous state.
+    SetInteraction {
+        id: StructureId,
+        kind: vv_core::interactions::InteractionKind,
+        on: bool,
+    },
     /// Adds a free-floating screen-space text caption, not tied to any
     /// structure (docs/UI_DESIGN.md's "screen-space" annotation type).
     /// Overwrites any existing caption of the same name.
@@ -777,6 +784,19 @@ impl Command {
                     measurement,
                     shown: was.is_some(),
                 }
+            }
+
+            Command::SetInteraction { id, kind, on } => {
+                let loaded = scene
+                    .structures_mut()
+                    .get_mut(id)
+                    .ok_or(SceneError::NoSuchStructure(id))?;
+                let was = if on {
+                    !loaded.interactions.insert(kind)
+                } else {
+                    loaded.interactions.remove(&kind)
+                };
+                Command::SetInteraction { id, kind, on: was }
             }
 
             Command::SetCaption { caption } => replace_caption(scene, caption),

@@ -27,8 +27,9 @@ pub enum Representation {
     Tube,
     /// Ribbon/arrow geometry from DSSP secondary structure
     /// (`vv_core::cartoon`, `vv_core::dssp`): helices and strands as flat
-    /// ribbons, everything else as a thin near-round one. No ligand/water
-    /// sticks alongside yet, unlike `Tube`.
+    /// ribbons, everything else as a thin near-round one. Nucleotides get
+    /// base plates; ligands, ions, glycans and lipids are drawn alongside
+    /// (see docs/RENDERING.md), tuned by `repopt`.
     Cartoon,
     /// Ray-marched Gaussian ("blobby") molecular surface
     /// (`vv_core::gaussian_surface`, `vv_render::GaussianSurfaceGpu`): a
@@ -270,6 +271,28 @@ pub struct RepOption {
     pub min: f32,
     pub max: f32,
     pub unit: &'static str,
+    /// Names for the integer values `0..choices.len()` when the option is
+    /// a choice rather than a size: `repopt NAME <choice>` and the
+    /// interface use them; the stored value stays a plain float.
+    pub choices: &'static [&'static str],
+}
+
+impl RepOption {
+    /// The value a typed `text` means: a choice name, else a number.
+    pub fn parse(&self, text: &str) -> Option<f32> {
+        match self.choices.iter().position(|c| *c == text) {
+            Some(i) => Some(i as f32),
+            None => text.parse().ok(),
+        }
+    }
+
+    /// `value` as the user would type it.
+    pub fn show(&self, value: f32) -> String {
+        match self.choices.get(value as usize) {
+            Some(name) => (*name).to_string(),
+            None => format!("{value}"),
+        }
+    }
 }
 
 const fn option(
@@ -287,8 +310,28 @@ const fn option(
         min,
         max,
         unit,
+        choices: &[],
     }
 }
+
+const fn choice(
+    name: &'static str,
+    label: &'static str,
+    default: usize,
+    choices: &'static [&'static str],
+) -> RepOption {
+    RepOption {
+        name,
+        label,
+        default: default as f32,
+        min: 0.0,
+        max: (choices.len() - 1) as f32,
+        unit: "",
+        choices,
+    }
+}
+
+const ON_OFF: &[&str] = &["off", "on"];
 
 const SCALE: RepOption = option("scale", "Atom size", 1.0, 0.2, 1.5, "× vdW");
 const BALL: RepOption = option("scale", "Ball size", 0.25, 0.1, 0.6, "× vdW");
@@ -318,6 +361,16 @@ const GLYCAN_SIZE: RepOption = option("size", "Shape size", 4.0, 1.5, 8.0, " Å"
 /// source script's icon preset does by zeroing its own cylinder radius.
 const GLYCAN_RADIUS: RepOption = option("radius", "Linkage radius", 0.5, 0.0, 1.5, " Å");
 
+/// How a cartoon draws each nucleotide's base: a stick to the pairing
+/// atom, a plate on its ring atoms (default), or one rung per base pair.
+const BASES: RepOption = choice("bases", "Bases", 1, &["stick", "plate", "ladder"]);
+const LIGANDS: RepOption = choice("ligands", "Ligands, cofactors", 1, ON_OFF);
+const IONS: RepOption = choice("ions", "Ions", 1, ON_OFF);
+const GLYCANS: RepOption = choice("glycans", "Glycans", 1, ON_OFF);
+const LIPIDS: RepOption = choice("lipids", "Lipids", 1, ON_OFF);
+const WATER: RepOption = choice("water", "Water", 0, ON_OFF);
+const ADDITIVES: RepOption = choice("additives", "Crystallization additives", 0, ON_OFF);
+
 impl Representation {
     /// Option `name` from the options set in `set`, or its default; `None`
     /// when this representation has no such option.
@@ -336,11 +389,23 @@ impl Representation {
             Representation::Sticks => &[STICK],
             // The first two show outright (`rep_options_ui`): putty's
             // switch and strength, the tuning people reach for.
-            Representation::Tube => &[RADIUS_BY, PUTTY, TUBE, TUBE_RADIUS_MIN],
+            Representation::Tube => &[
+                RADIUS_BY,
+                PUTTY,
+                TUBE,
+                TUBE_RADIUS_MIN,
+                LIGANDS,
+                IONS,
+                GLYCANS,
+                LIPIDS,
+                WATER,
+                ADDITIVES,
+            ],
+            Representation::Cartoon => &[BASES, LIGANDS, IONS, GLYCANS, LIPIDS, WATER, ADDITIVES],
             Representation::GaussianSurface => &[BLOB],
             Representation::SkinSurface => &[SHRINK],
             Representation::Glycan => &[GLYCAN_SIZE, GLYCAN_RADIUS],
-            Representation::Cartoon | Representation::Lines => &[],
+            Representation::Lines => &[],
         }
     }
 }
@@ -411,6 +476,8 @@ pub struct LoadedStructure {
     /// Distances, angles and dihedrals kept on screen
     /// (`Command::SetMeasurement`), re-measured at the current frame.
     pub measurements: Vec<Measurement>,
+    /// Contact overlays switched on (`Command::SetInteraction`).
+    pub interactions: std::collections::BTreeSet<vv_core::interactions::InteractionKind>,
     /// Which coordinate set (of `structure.frame_count()`) is current.
     /// Always `0` for a single-frame structure. Two ways to change it,
     /// deliberately: `Command::SetFrame` (undoable, for a script/console/
@@ -445,6 +512,7 @@ impl LoadedStructure {
             values: Default::default(),
             labels: Default::default(),
             measurements: Vec::new(),
+            interactions: Default::default(),
             frame: 0,
         }
     }

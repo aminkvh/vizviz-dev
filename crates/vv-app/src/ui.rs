@@ -1515,6 +1515,14 @@ fn rep_option_ui(
         }
         return;
     }
+    if !o.choices.is_empty() {
+        let now = rep.option(o.name).unwrap_or(o.default) as usize;
+        ui.label(o.label);
+        if let Some(i) = widgets::segmented(ui, o.choices, Some(now)) {
+            set.push((o.name, Some(i as f32)));
+        }
+        return;
+    }
     let key = egui::Id::new(("rep option", id, rep.id, o.name));
     let mut value = ui
         .data_mut(|d| d.get_temp::<f32>(key))

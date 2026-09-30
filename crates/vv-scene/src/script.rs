@@ -198,10 +198,15 @@ pub const SPECS: &[Spec] = &[
     Spec {
         id: "repopt",
         title: "Representation option",
-        keywords: &["size", "radius", "probe", "scale", "bond", "blob", "shrink", "tune"],
+        keywords: &[
+            "size", "radius", "probe", "scale", "bond", "blob", "shrink", "tune", "bases",
+            "ligands", "ions", "water", "glycans", "lipids", "additives",
+        ],
         usage: "repopt [NAME VALUE|default]",
         help: "Tune the current rep: atom `scale`, `bond` or tube `radius` in Angstrom, the \
-               SAS/SES `probe` radius, Gaussian `blob`, skin `shrink`. Alone, lists the \
+               SAS/SES `probe` radius, Gaussian `blob`, skin `shrink`. A cartoon or tube \
+               also takes `ligands`, `ions`, `glycans`, `lipids`, `water`, `additives` \
+               (on|off), and a cartoon `bases` (plate|ladder|stick). Alone, lists the \
                options of the current rep's style.",
     },
     Spec {
@@ -347,6 +352,13 @@ pub const SPECS: &[Spec] = &[
         keywords: &["distance", "angle", "dihedral"],
         usage: "measurements",
         help: "Every measurement on screen, with its value at the current frame.",
+    },
+    Spec {
+        id: "interactions",
+        title: "Interactions",
+        keywords: &["hbond", "hydrogen", "metal", "coordination", "salt", "bridge", "dashes"],
+        usage: "interactions [hbond|metal|saltbridge on|off]",
+        help: "Draw dashed lines for hydrogen bonds, metal coordination or salt bridges of the current structure. Alone, lists which are on.",
     },
     Spec {
         id: "contacts",
@@ -1067,10 +1079,20 @@ pub fn run_line(
                     .iter()
                     .map(|o| {
                         let now = rep.option(o.name).unwrap_or(o.default);
-                        format!(
-                            "{} = {now}{} ({} to {}; {})",
-                            o.name, o.unit, o.min, o.max, o.label
-                        )
+                        if o.choices.is_empty() {
+                            format!(
+                                "{} = {now}{} ({} to {}; {})",
+                                o.name, o.unit, o.min, o.max, o.label
+                            )
+                        } else {
+                            format!(
+                                "{} = {} ({}; {})",
+                                o.name,
+                                o.show(now),
+                                o.choices.join("|"),
+                                o.label
+                            )
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join("\n"));
@@ -1085,7 +1107,7 @@ pub fn run_line(
             let value = match value {
                 "default" => None,
                 v => {
-                    let v: f32 = v.parse().map_err(|_| usage("repopt"))?;
+                    let v = spec.parse(v).ok_or_else(|| usage("repopt"))?;
                     if !(spec.min..=spec.max).contains(&v) {
                         return Err(ScriptError(format!(
                             "{name} must be {} to {}",
@@ -1104,7 +1126,10 @@ pub fn run_line(
                     value,
                 },
             )?;
-            Ok(format!("{name} = {}", value.unwrap_or(spec.default)))
+            Ok(format!(
+                "{name} = {}",
+                spec.show(value.unwrap_or(spec.default))
+            ))
         }
         "showrep" => {
             let (n, state) = split_verb(rest);
@@ -1443,6 +1468,28 @@ pub fn run_line(
                 lines.push("no measurements".into());
             }
             Ok(lines.join("\n"))
+        }
+        "interactions" => {
+            let id = current(scene)?;
+            if rest.is_empty() {
+                let on = &scene.structure(id).expect("current exists").interactions;
+                let names: Vec<&str> = on.iter().map(|k| k.name()).collect();
+                return Ok(if names.is_empty() {
+                    "no interactions shown".into()
+                } else {
+                    names.join(", ")
+                });
+            }
+            let (kind, state) = split_verb(rest);
+            let kind = vv_core::interactions::InteractionKind::parse(kind)
+                .ok_or_else(|| usage("interactions"))?;
+            let on = match state {
+                "on" => true,
+                "off" => false,
+                _ => return Err(usage("interactions")),
+            };
+            history.dispatch(scene, Command::SetInteraction { id, kind, on })?;
+            Ok(format!("#{} {} {state}", id.to_raw(), kind.name()))
         }
         "sasa" => {
             let (filter, report) = match rest.split_once('|') {
@@ -1825,6 +1872,81 @@ mod tests {
         assert_eq!(loaded.rep().representation, Representation::Glycan);
         assert_eq!(loaded.rep().option("size"), Some(1.5));
         assert_eq!(loaded.rep().option("radius"), Some(0.0));
+    }
+
+    #[test]
+    fn interactions_toggle_undo_and_survive_a_session() {
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::default();
+        run_line(
+            &mut scene,
+            &mut history,
+            &format!("load {}", fixture("1CRN.pdb")),
+        )
+        .unwrap();
+        let run = |scene: &mut Scene, history: &mut CommandHistory, line: &str| {
+            run_line(scene, history, line).map_err(|e| e.0)
+        };
+        assert_eq!(
+            run(&mut scene, &mut history, "interactions").unwrap(),
+            "no interactions shown"
+        );
+        run(&mut scene, &mut history, "interactions hbond on").unwrap();
+        run(&mut scene, &mut history, "interactions metal on").unwrap();
+        assert_eq!(
+            run(&mut scene, &mut history, "interactions").unwrap(),
+            "hbond, metal"
+        );
+        assert!(run(&mut scene, &mut history, "interactions ionic on").is_err());
+        history.undo(&mut scene).unwrap();
+        assert_eq!(
+            run(&mut scene, &mut history, "interactions").unwrap(),
+            "hbond"
+        );
+
+        let path = std::env::temp_dir().join("vizviz_interactions.json");
+        crate::session::save(&scene, &path, None).unwrap();
+        let file = crate::session::read(&path).unwrap();
+        let mut restored = Scene::new();
+        crate::session::apply(&file, &mut restored, &mut CommandHistory::default());
+        let loaded = restored.structures().next().unwrap().1;
+        assert_eq!(loaded.interactions.len(), 1);
+    }
+
+    #[test]
+    fn a_cartoons_choice_options_take_names_and_survive_a_session() {
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::default();
+        run_line(
+            &mut scene,
+            &mut history,
+            &format!("load {}", fixture("1CRN.pdb")),
+        )
+        .unwrap();
+        let mut run = |line: &str| run_line(&mut scene, &mut history, line).map_err(|e| e.0);
+        run("rep cartoon").unwrap();
+        assert!(run("repopt")
+            .unwrap()
+            .contains("bases = plate (stick|plate|ladder;"));
+        assert_eq!(run("repopt bases ladder").unwrap(), "bases = ladder");
+        assert_eq!(run("repopt ions off").unwrap(), "ions = off");
+        assert_eq!(run("repopt water 1").unwrap(), "water = on");
+        assert!(run("repopt bases sideways").is_err());
+        assert!(run("repopt ions 2").unwrap_err().contains("0 to 1"));
+
+        let path = std::env::temp_dir().join("vizviz_rep_choices.json");
+        crate::session::save(&scene, &path, None).unwrap();
+        let file = crate::session::read(&path).unwrap();
+        let mut restored = Scene::new();
+        let applied = crate::session::apply(&file, &mut restored, &mut CommandHistory::default());
+        let rep = restored
+            .structure(applied.ids[0].unwrap())
+            .unwrap()
+            .rep()
+            .clone();
+        assert_eq!(rep.option("bases"), Some(2.0));
+        assert_eq!(rep.option("ions"), Some(0.0));
+        assert_eq!(rep.option("water"), Some(1.0));
     }
 
     #[test]
