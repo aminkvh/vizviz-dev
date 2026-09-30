@@ -55,7 +55,7 @@ pub use hbond::{hydrogen_bonds_into, HydrogenBond};
 pub use intern::{InternId, Interner};
 pub use material::MaterialPreset;
 pub use residue_class::{ClassCounts, PolymerHint, ResidueClass, Roles};
-pub use select::{select, Expr, SelectError};
+pub use select::{select, select_under, Expr, SelectError};
 pub use spatial::Grid;
 pub use structure::{FrameSource, Structure, StructureError, DEFAULT_FRAME_BUDGET};
 pub use topology::{

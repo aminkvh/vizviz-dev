@@ -15,6 +15,7 @@ use fixedbitset::FixedBitSet;
 use glam::Vec3;
 use rayon::prelude::*;
 
+use crate::altloc::AltlocPolicy;
 use crate::antibody::{cdr_residues, CdrDefinition};
 use crate::{
     flags, Element, Grid, InternId, ResidueClass, ResidueRec, Roles, SecondaryStructure, Topology,
@@ -27,6 +28,16 @@ pub fn select(
     expr: &str,
 ) -> Result<FixedBitSet, SelectError> {
     Ok(parse(expr)?.evaluate(topology, positions))
+}
+
+/// [`select`] with `shown` following `policy`.
+pub fn select_under(
+    topology: &Topology,
+    positions: &[Vec3],
+    expr: &str,
+    policy: AltlocPolicy,
+) -> Result<FixedBitSet, SelectError> {
+    Ok(parse(expr)?.evaluate_under(topology, positions, policy))
 }
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq)]
@@ -135,6 +146,8 @@ pub enum Expr {
     Element(Vec<Element>),
     /// Single alternate-location characters, matched exactly.
     Altloc(Vec<u8>),
+    /// The atoms the altloc display policy draws.
+    Shown,
     /// Inclusive `(lo, hi)` ranges.
     Range(Field, Vec<(i64, i64)>),
     /// Antibody CDR residues under a definition; no picks means every CDR.
@@ -242,6 +255,7 @@ enum Kw {
     Name,
     Element,
     Altloc,
+    Shown,
     Range(Field),
     Cdr,
     Compare(Column),
@@ -282,6 +296,7 @@ fn keyword(word: &str) -> Option<Kw> {
         "name" => Kw::Name,
         "element" => Kw::Element,
         "altloc" => Kw::Altloc,
+        "shown" => Kw::Shown,
         "resid" => Kw::Range(Field::Resid),
         "seqid" => Kw::Range(Field::Seqid),
         "serial" => Kw::Range(Field::Serial),
@@ -421,6 +436,7 @@ impl<'a> Parser<'a> {
             Some(Kw::Name) => Ok(Expr::Name(self.strings(&tok)?)),
             Some(Kw::Element) => self.elements(&tok),
             Some(Kw::Altloc) => self.altlocs(&tok),
+            Some(Kw::Shown) => Ok(Expr::Shown),
             Some(Kw::Range(field)) => self.ranges(&tok, field),
             Some(Kw::Cdr) => self.cdr(),
             Some(Kw::Compare(column)) => self.compare(&tok, column),
@@ -644,6 +660,16 @@ impl Expr {
     /// One bit per atom. `positions` is only read by `within`, and must
     /// then hold one entry per atom.
     pub fn evaluate(&self, t: &Topology, positions: &[Vec3]) -> FixedBitSet {
+        self.evaluate_under(t, positions, AltlocPolicy::default())
+    }
+
+    /// As [`Self::evaluate`], with `shown` meaning the atoms `policy` draws.
+    pub fn evaluate_under(
+        &self,
+        t: &Topology,
+        positions: &[Vec3],
+        policy: AltlocPolicy,
+    ) -> FixedBitSet {
         let n = t.atom_count();
         match self {
             Expr::Class(class) => class_mask(t, *class),
@@ -660,6 +686,7 @@ impl Expr {
             Expr::Altloc(chars) => {
                 atom_mask(n, |i| t.alt_loc.get(i).is_some_and(|a| chars.contains(a)))
             }
+            Expr::Shown => shown_mask(t, policy),
             Expr::Range(field, ranges) => range_mask(t, *field, ranges),
             Expr::Cdr(definition, picks) => cdr_mask(t, *definition, picks),
             Expr::Compare(column, cmp, value) => {
@@ -669,23 +696,26 @@ impl Expr {
                 };
                 atom_mask(n, |i| column.get(i).is_some_and(|&x| cmp.test(x, *value)))
             }
-            Expr::Within(radius, inner) => {
-                within(t, positions, *radius, &inner.evaluate(t, positions))
-            }
-            Expr::Byres(inner) => byres(t, &inner.evaluate(t, positions)),
+            Expr::Within(radius, inner) => within(
+                t,
+                positions,
+                *radius,
+                &inner.evaluate_under(t, positions, policy),
+            ),
+            Expr::Byres(inner) => byres(t, &inner.evaluate_under(t, positions, policy)),
             Expr::Not(inner) => {
-                let mut m = inner.evaluate(t, positions);
+                let mut m = inner.evaluate_under(t, positions, policy);
                 m.toggle_range(..);
                 m
             }
             Expr::And(a, b) => {
-                let mut m = a.evaluate(t, positions);
-                m.intersect_with(&b.evaluate(t, positions));
+                let mut m = a.evaluate_under(t, positions, policy);
+                m.intersect_with(&b.evaluate_under(t, positions, policy));
                 m
             }
             Expr::Or(a, b) => {
-                let mut m = a.evaluate(t, positions);
-                m.union_with(&b.evaluate(t, positions));
+                let mut m = a.evaluate_under(t, positions, policy);
+                m.union_with(&b.evaluate_under(t, positions, policy));
                 m
             }
         }
@@ -703,6 +733,14 @@ impl Cmp {
             Cmp::Ne => x != v,
         }
     }
+}
+
+fn shown_mask(t: &Topology, policy: AltlocPolicy) -> FixedBitSet {
+    crate::altloc::visible_atoms(t, policy).unwrap_or_else(|| {
+        let mut all = FixedBitSet::with_capacity(t.atom_count());
+        all.insert_range(..);
+        all
+    })
 }
 
 fn atom_mask(n: usize, pred: impl Fn(usize) -> bool) -> FixedBitSet {
@@ -1332,5 +1370,30 @@ mod tests {
         let (t, _) = fixture();
         let m = parse("protein and name CA").unwrap().evaluate(&t, &[]);
         assert_eq!(m.ones().collect::<Vec<_>>(), vec![1, 7]);
+    }
+
+    #[test]
+    fn shown_is_the_atoms_the_altloc_policy_draws() {
+        let (mut t, p) = fixture();
+        t.alt_loc[0] = b'A';
+        t.occupancy[0] = 0.1;
+        t.alt_loc[1] = b'B';
+        t.occupancy[1] = 0.9;
+        let count = |expr: &str, policy| select_under(&t, &p, expr, policy).unwrap();
+        let first = count("shown", AltlocPolicy::First);
+        assert!(!first.contains(0) && first.contains(1));
+        assert_eq!(
+            count("shown", AltlocPolicy::All).count_ones(..),
+            t.atom_count()
+        );
+        assert!(
+            count("altloc A", AltlocPolicy::First).contains(0),
+            "typed selections keep hidden conformers"
+        );
+        assert!(!count("altloc A and shown", AltlocPolicy::First).contains(0));
+        assert!(
+            !select(&t, &p, "shown").unwrap().contains(0),
+            "default policy is `first`"
+        );
     }
 }

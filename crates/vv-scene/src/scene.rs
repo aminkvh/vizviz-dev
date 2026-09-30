@@ -455,6 +455,20 @@ impl LoadedStructure {
         vv_core::altloc::visible_atoms(&self.structure.topology, self.altloc)
     }
 
+    /// `expr` over `frame`, its `shown` keyword following the altloc policy.
+    pub fn select(
+        &self,
+        expr: &str,
+        frame: usize,
+    ) -> Result<vv_core::fixedbitset::FixedBitSet, vv_core::SelectError> {
+        vv_core::select_under(
+            &self.structure.topology,
+            self.structure.frame(frame).positions(),
+            expr,
+            self.altloc,
+        )
+    }
+
     /// `atoms` without the ones the altloc policy hides.
     pub fn only_shown(&self, atoms: &[u32]) -> Vec<u32> {
         let shown = self.shown_atoms();
@@ -490,6 +504,20 @@ impl LoadedStructure {
             }
         }
         Some(keep)
+    }
+
+    /// `pairs` with each hidden conformer atom replaced by the shown atom
+    /// it stands in for, for bonds between name-found atoms.
+    pub fn as_shown(&self, pairs: &[[u32; 2]]) -> Vec<[u32; 2]> {
+        let Some(shown) = self.shown_atoms() else {
+            return pairs.to_vec();
+        };
+        let twins: std::collections::HashMap<u32, u32> =
+            vv_core::altloc::stand_ins(&self.structure.topology, &shown)
+                .into_iter()
+                .collect();
+        let swap = |a: u32| twins.get(&a).copied().unwrap_or(a);
+        pairs.iter().map(|&[a, b]| [swap(a), swap(b)]).collect()
     }
 
     /// The rep that edits apply to.

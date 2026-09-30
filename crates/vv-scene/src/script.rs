@@ -669,7 +669,8 @@ fn combined_selection(
     );
     match form {
         SelectForm::Add(expr) => {
-            let hits = vv_core::select(&structure.topology, structure.frame(0).positions(), expr)
+            let hits = loaded
+                .select(expr, 0)
                 .map_err(|e| ScriptError(format!("{expr}: {e}")))?;
             mask.union_with(&hits);
         }
@@ -1459,7 +1460,8 @@ pub fn run_line(
             let coords = structure.frame(loaded.frame);
             let all = coords.positions();
             let pick = |expr: &str| -> Result<Vec<bool>, ScriptError> {
-                let mask = vv_core::select(&structure.topology, all, expr)
+                let mask = loaded
+                    .select(expr, loaded.frame)
                     .map_err(|e| ScriptError(format!("bad selection `{expr}`: {e}")))?;
                 let mut picked = vec![false; all.len()];
                 for a in mask.ones() {
@@ -1540,7 +1542,8 @@ pub fn run_line(
             let p = coords.positions();
             let group = |expr: &str| -> Result<Vec<u32>, ScriptError> {
                 let expr = expr.trim();
-                vv_core::select(t, p, expr)
+                loaded
+                    .select(expr, 0)
                     .map(|bits| bits.ones().map(|i| i as u32).collect())
                     .map_err(|e| ScriptError(format!("bad selection `{expr}`: {e}")))
             };
@@ -1587,12 +1590,9 @@ pub fn run_line(
             let mask = if selection.is_empty() {
                 None
             } else {
-                let m = vv_core::select(
-                    &loaded.structure.topology,
-                    loaded.structure.frame(loaded.frame).positions(),
-                    &selection,
-                )
-                .map_err(|e| ScriptError(format!("bad selection `{selection}`: {e}")))?;
+                let m = loaded
+                    .select(&selection, loaded.frame)
+                    .map_err(|e| ScriptError(format!("bad selection `{selection}`: {e}")))?;
                 if m.count_ones(..) == 0 {
                     return Err(ScriptError(format!("`{selection}` selects no atoms")));
                 }

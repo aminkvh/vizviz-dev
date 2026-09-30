@@ -448,6 +448,8 @@ const ANNOTATION_CATEGORIES: &[(&str, Option<&[&str]>, usize)] = &[
     ("entity", None, usize::MAX),
     ("entity_src_gen", None, usize::MAX),
     ("entity_src_nat", None, usize::MAX),
+    ("pdbx_entity_branch", None, usize::MAX),
+    ("pdbx_entity_branch_descriptor", None, usize::MAX),
     ("struct_ref", None, usize::MAX),
     (
         "pdbx_unobs_or_zero_occ_residues",

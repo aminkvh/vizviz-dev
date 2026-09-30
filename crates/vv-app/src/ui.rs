@@ -788,6 +788,15 @@ pub(crate) fn measurement_draws(scene: &Scene) -> Vec<MeasurementDraw> {
 /// strip's button can focus it from outside the panel.
 pub(crate) const SELECTION_FIELD_ID: &str = "vizviz-selection-expr";
 
+fn expression_field(ui: &mut Ui, text: &mut String, width: f32) -> egui::Response {
+    ui.add(
+        egui::TextEdit::singleline(text)
+            .id(egui::Id::new(SELECTION_FIELD_ID))
+            .hint_text("chain A and name CA")
+            .desired_width(width),
+    )
+}
+
 /// The Structures panel's rename-in-progress key (see `inline_rename_ui`).
 fn structure_rename_key() -> egui::Id {
     egui::Id::new("structure-rename")
@@ -2785,12 +2794,7 @@ impl AppUi<'_> {
             .unwrap_or_default();
         let (edit, plus) = ui
             .horizontal(|ui| {
-                let edit = ui.add(
-                    egui::TextEdit::singleline(&mut text)
-                        .id(egui::Id::new(SELECTION_FIELD_ID))
-                        .hint_text("chain A and name CA")
-                        .desired_width(ui.available_width() - 36.0),
-                );
+                let edit = expression_field(ui, &mut text, ui.available_width() - 36.0);
                 let plus = widgets::button(ui, icon::PLUS, "", Variant::Secondary)
                     .on_hover_text("Add a selection");
                 (edit, plus)
@@ -2876,13 +2880,10 @@ impl AppUi<'_> {
             return None;
         }
         let loaded = self.scene.structure(id)?;
-        let result = vv_core::select(
-            &loaded.structure.topology,
-            loaded.structure.frame(loaded.frame).positions(),
-            trimmed,
-        )
-        .map(|mask| mask.count_ones(..))
-        .map_err(|e| e.to_string());
+        let result = loaded
+            .select(trimmed, loaded.frame)
+            .map(|mask| mask.count_ones(..))
+            .map_err(|e| e.to_string());
         cache.2 = Some(result.clone());
         ui.data_mut(|d| d.insert_temp(key, cache));
         Some(result)
@@ -4939,5 +4940,34 @@ mod altloc_annotation_tests {
         let (scene, id, hidden, kept) = scene();
         let loaded = scene.structure(id).unwrap();
         assert_eq!(loaded.only_shown(&[hidden, kept]), vec![kept]);
+    }
+}
+
+#[cfg(test)]
+mod expression_focus_tests {
+    use super::*;
+
+    fn frame(ctx: &egui::Context, focus: &mut bool, text: &mut String) {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let edit = expression_field(ui, text, 200.0);
+            if std::mem::take(focus) {
+                edit.request_focus();
+            }
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_requested_focus_lands_on_the_expression_field_and_is_spent() {
+        let ctx = egui::Context::default();
+        let (mut focus, mut text) = (false, String::new());
+        let id = egui::Id::new(SELECTION_FIELD_ID);
+        frame(&ctx, &mut focus, &mut text);
+        assert!(!ctx.memory(|m| m.has_focus(id)));
+        focus = true;
+        frame(&ctx, &mut focus, &mut text);
+        assert!(!focus, "the request is consumed once the field is drawn");
+        frame(&ctx, &mut focus, &mut text);
+        assert!(ctx.memory(|m| m.has_focus(id)));
     }
 }

@@ -426,6 +426,17 @@ impl PdbHeader {
                 rows: entities.into_iter().map(|(id, v)| vec![id, v]).collect(),
             });
         }
+        let strands = spec_per_mol_id(&self.compnd, "CHAIN");
+        if !strands.is_empty() {
+            out.categories.push(AnnotationCategory {
+                name: "entity_poly".to_string(),
+                items: vec!["entity_id".to_string(), "pdbx_strand_id".to_string()],
+                rows: strands
+                    .into_iter()
+                    .map(|(id, chains)| vec![id, chains.replace(' ', "")])
+                    .collect(),
+            });
+        }
         let organisms = spec_per_mol_id(&self.source, "ORGANISM_SCIENTIFIC");
         if !organisms.is_empty() {
             out.categories.push(AnnotationCategory {

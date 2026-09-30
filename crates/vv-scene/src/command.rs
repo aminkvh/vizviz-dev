@@ -660,13 +660,12 @@ impl Command {
 
             Command::SelectExpr { id, expr } => {
                 let loaded = scene.structure(id).ok_or(SceneError::NoSuchStructure(id))?;
-                let structure = &loaded.structure;
-                let bits =
-                    vv_core::select(&structure.topology, structure.frame(0).positions(), &expr)
-                        .map_err(|source| SceneError::Selection {
-                            expr: expr.clone(),
-                            source,
-                        })?;
+                let bits = loaded
+                    .select(&expr, 0)
+                    .map_err(|source| SceneError::Selection {
+                        expr: expr.clone(),
+                        source,
+                    })?;
                 let old = scene.set_active(Some(ActiveSelection {
                     structure: id,
                     mask: Arc::new(bits),

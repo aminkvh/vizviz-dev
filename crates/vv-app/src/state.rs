@@ -1274,8 +1274,13 @@ impl State {
         if live_failed {
             self.fail_live_request();
         }
+        // A panel opened or a focus asked for draws on the next frame.
+        let next_frame_needed = layout_request.is_some() || self.ribbon.focus_expression;
         if let Some(request) = layout_request {
             self.apply_layout_request(request);
+        }
+        if next_frame_needed {
+            self.egui_ctx.request_repaint();
         }
         if let Some(mut request) = render_request {
             request.path = export_target(&request.path);

@@ -15,6 +15,7 @@ use vv_core::{
 };
 
 use crate::pdb::encode_hybrid36;
+use crate::pdb_compnd::compnd_source_lines;
 use crate::pdb_names::shorten;
 use crate::pdb_seqres::seqres_lines;
 use crate::polymer_layout::Layout;
@@ -439,6 +440,9 @@ pub fn write(
     let (plan, new_serial) = build_plan(topology, atoms, &chain_ids);
 
     let layout = Layout::new(topology, atoms);
+    for line in compnd_source_lines(topology, &layout, &chain_ids) {
+        write_padded(out, &line)?;
+    }
     for line in seqres_lines(topology, &layout, &chain_ids) {
         write_padded(out, &line)?;
     }

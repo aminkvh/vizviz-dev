@@ -7,7 +7,8 @@ use std::io::{self, Write};
 
 use vv_core::{InternId, Topology};
 
-use crate::mmcif_write::token;
+use crate::entity_notes::{EntityNotes, ENTITY_TABLES};
+use crate::mmcif_write::{cell, token};
 use crate::polymer_layout::{Entity, Kind, Layout};
 
 fn entity_type(kind: Kind) -> &'static str {
@@ -107,12 +108,65 @@ fn loop_header(out: &mut impl Write, category: &str, items: &[&str]) -> io::Resu
     Ok(())
 }
 
-fn write_entity(layout: &Layout, out: &mut impl Write) -> io::Result<()> {
-    loop_header(out, "entity", &["id", "type"])?;
+/// `_entity` items about the molecule itself, carried over when the file
+/// gave them (counts and weights would go stale with an edited structure).
+const CARRIED_ENTITY_ITEMS: [&str; 4] =
+    ["pdbx_description", "src_method", "pdbx_ec", "pdbx_mutation"];
+
+fn write_entity(layout: &Layout, notes: &EntityNotes, out: &mut impl Write) -> io::Result<()> {
+    let count = layout.entities.len();
+    let carried: Vec<&str> = CARRIED_ENTITY_ITEMS
+        .into_iter()
+        .filter(|item| (0..count).any(|e| notes.entity_value(e, item).is_some()))
+        .collect();
+    let items: Vec<&str> = ["id", "type"].into_iter().chain(carried.clone()).collect();
+    loop_header(out, "entity", &items)?;
     for (i, e) in layout.entities.iter().enumerate() {
-        writeln!(out, "{} {}", i + 1, entity_type(e.kind))?;
+        write!(out, "{} {}", i + 1, entity_type(e.kind))?;
+        for item in &carried {
+            write!(out, " {}", cell(notes.entity_value(i, item).unwrap_or("")))?;
+        }
+        writeln!(out)?;
     }
     writeln!(out, "#")
+}
+
+/// The file's source and branch tables, rows renumbered to the written
+/// entities they describe.
+fn write_entity_sources(
+    layout: &Layout,
+    notes: &EntityNotes,
+    out: &mut impl Write,
+) -> io::Result<()> {
+    for category in ENTITY_TABLES {
+        let mut header_written = false;
+        for entity in 0..layout.entities.len() {
+            let Some((cat, rows)) = notes.rows(category, entity) else {
+                continue;
+            };
+            let id_col = cat.column("entity_id").expect("rows matched on it");
+            for row in rows {
+                if !header_written {
+                    let items: Vec<&str> = cat.items.iter().map(String::as_str).collect();
+                    loop_header(out, category, &items)?;
+                    header_written = true;
+                }
+                let cells: Vec<String> = cat.rows[row]
+                    .iter()
+                    .enumerate()
+                    .map(|(c, v)| match c == id_col {
+                        true => (entity + 1).to_string(),
+                        false => cell(v),
+                    })
+                    .collect();
+                writeln!(out, "{}", cells.join(" "))?;
+            }
+        }
+        if header_written {
+            writeln!(out, "#")?;
+        }
+    }
+    Ok(())
 }
 
 fn write_entity_poly(t: &Topology, layout: &Layout, out: &mut impl Write) -> io::Result<()> {
@@ -144,7 +198,12 @@ fn write_entity_poly(t: &Topology, layout: &Layout, out: &mut impl Write) -> io:
     writeln!(out, "#")
 }
 
-fn write_entity_nonpoly(t: &Topology, layout: &Layout, out: &mut impl Write) -> io::Result<()> {
+fn write_entity_nonpoly(
+    t: &Topology,
+    layout: &Layout,
+    notes: &EntityNotes,
+    out: &mut impl Write,
+) -> io::Result<()> {
     let single: Vec<_> = layout
         .entities
         .iter()
@@ -161,10 +220,10 @@ fn write_entity_nonpoly(t: &Topology, layout: &Layout, out: &mut impl Write) -> 
     )?;
     for (i, e) in single {
         let comp = token(t.names.get(e.comps[0]));
-        let name = if e.kind == Kind::Water {
-            "water"
-        } else {
-            &comp
+        let name = match (e.kind, notes.entity_value(i, "pdbx_description")) {
+            (Kind::Water, _) => "water".to_string(),
+            (_, Some(description)) => cell(description),
+            _ => comp.clone(),
         };
         writeln!(out, "{} {name} {comp}", i + 1)?;
     }
@@ -219,9 +278,11 @@ pub(crate) fn write_entity_tables(
     if layout.entities.is_empty() {
         return Ok(());
     }
-    write_entity(layout, out)?;
+    let notes = EntityNotes::new(t, layout);
+    write_entity(layout, &notes, out)?;
+    write_entity_sources(layout, &notes, out)?;
     write_entity_poly(t, layout, out)?;
-    write_entity_nonpoly(t, layout, out)?;
+    write_entity_nonpoly(t, layout, &notes, out)?;
     write_chem_comp(t, layout, out)
 }
 

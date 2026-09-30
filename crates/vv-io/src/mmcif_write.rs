@@ -59,6 +59,26 @@ pub(crate) fn token(s: &str) -> String {
     }
 }
 
+/// Any value as one CIF cell: bare when that reads back the same, else
+/// quoted, or a text field when it holds both quote characters or a
+/// line break. An empty value is the null `?`.
+pub(crate) fn cell(s: &str) -> String {
+    let bare = !s.is_empty()
+        && !s.starts_with(['_', '#', '$', '\'', '"', ';', '[', ']', '?', '.'])
+        && !s.contains(char::is_whitespace);
+    if bare {
+        return s.to_string();
+    }
+    match s {
+        "" => "?".to_string(),
+        s if s.contains('\n') || (s.contains('\'') && s.contains('"')) => {
+            format!("\n;{s}\n;\n")
+        }
+        s if s.contains('\'') => format!("\"{s}\""),
+        s => format!("'{s}'"),
+    }
+}
+
 fn conn_type(kind: ExplicitBondKind) -> &'static str {
     match kind {
         ExplicitBondKind::Disulfide => "disulf",

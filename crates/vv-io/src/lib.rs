@@ -13,6 +13,7 @@ mod atom_site;
 pub mod bcif;
 pub mod cif;
 pub mod dcd;
+mod entity_notes;
 #[cfg(feature = "fetch")]
 pub mod fetch;
 pub mod float;
@@ -24,6 +25,7 @@ pub mod mmcif_write;
 mod msgpack;
 pub mod netcdf;
 pub mod pdb;
+mod pdb_compnd;
 mod pdb_names;
 mod pdb_seqres;
 pub mod pdb_write;

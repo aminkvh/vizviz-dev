@@ -967,22 +967,29 @@ struct CartoonModel {
     spline_at: usize,
 }
 
-/// The rungs of the nucleotides `keep` accepts, as sticks.
-fn build_ladder(
-    ctx: &GpuContext,
-    renderer: &Renderer,
-    structure: &Structure,
-    keep: &Option<Vec<bool>>,
-    frame: usize,
-    all_colors: &[u32],
-) -> Option<Derived> {
-    let rungs: Vec<[u32; 2]> = vv_core::nucleic_ladder(&structure.topology)
+/// The rungs of the nucleotides `keep` accepts, on the shown conformers.
+fn ladder_rungs(loaded: &LoadedStructure, keep: &Option<Vec<bool>>) -> Vec<[u32; 2]> {
+    let rungs = loaded.as_shown(&vv_core::nucleic_ladder(&loaded.structure.topology));
+    rungs
         .into_iter()
         .filter(|[a, b]| {
             keep.as_ref()
                 .is_none_or(|k| k[*a as usize] && k[*b as usize])
         })
-        .collect();
+        .collect()
+}
+
+/// The rungs of the nucleotides `keep` accepts, as sticks.
+fn build_ladder(
+    ctx: &GpuContext,
+    renderer: &Renderer,
+    loaded: &LoadedStructure,
+    keep: &Option<Vec<bool>>,
+    frame: usize,
+    all_colors: &[u32],
+) -> Option<Derived> {
+    let structure = &loaded.structure;
+    let rungs = ladder_rungs(loaded, keep);
     if rungs.is_empty() {
         return None;
     }
@@ -1185,12 +1192,9 @@ pub(crate) fn select_atoms(
             None => return Ok(None),
         }
     } else {
-        vv_core::select(
-            &loaded.structure.topology,
-            loaded.structure.frame(frame).positions(),
-            &rep.selection,
-        )
-        .map_err(|e| format!("{}: rep selection `{}`: {e}", loaded.label, rep.selection))?
+        loaded
+            .select(&rep.selection, frame)
+            .map_err(|e| format!("{}: rep selection `{}`: {e}", loaded.label, rep.selection))?
     };
     if let Some(shown) = &shown {
         bits.intersect_with(shown);
@@ -1894,7 +1898,7 @@ impl GpuCache {
                                 bindings,
                                 from: model.plan.clone(),
                                 spline: model.spline.clone(),
-                                ladder: build_ladder(ctx, renderer, structure, &keep, frame, &all),
+                                ladder: build_ladder(ctx, renderer, loaded, &keep, frame, &all),
                             });
                         }
                         Err(OutOfGpuMemory) => {
@@ -2521,6 +2525,47 @@ mod tests {
         let drawn_plan = plan.filter(|a| keep[a as usize]);
         assert_eq!(drawn_plan.spans.len(), plan.spans.len());
         assert_eq!(spline.controls[1], Vec3::new(3.8, 0.0, 0.0));
+    }
+
+    /// Two guanines whose first P and N1 are conformer A (0.3, listed
+    /// first, hidden under `First`) with a B twin (0.7) elsewhere.
+    fn dna_with_split_atoms() -> (Scene, vv_scene::StructureId) {
+        let atom = |serial: u32, name: &str, alt: char, seq: u32, x: f32, occ: f32| {
+            format!(
+                "ATOM  {serial:>5} {name:<4}{alt} DG A{seq:>4}    {x:>8.3}{:>8.3}{:>8.3}{occ:>6.2}{:>6.2}           C
+",
+                0.0, 0.0, 0.0
+            )
+        };
+        let text = [
+            atom(1, "P", 'A', 1, 90.0, 0.3),
+            atom(2, "P", 'B', 1, 1.0, 0.7),
+            atom(3, "N9", ' ', 1, 2.0, 1.0),
+            atom(4, "N1", 'A', 1, 91.0, 0.3),
+            atom(5, "N1", 'B', 1, 3.0, 0.7),
+            atom(6, "P", ' ', 2, 6.0, 1.0),
+            atom(7, "N9", ' ', 2, 7.0, 1.0),
+            atom(8, "N1", ' ', 2, 8.0, 1.0),
+        ]
+        .concat();
+        let path = std::env::temp_dir().join(format!("vv_split_dna_{}.pdb", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let mut scene = Scene::new();
+        vv_scene::CommandHistory::new(10)
+            .dispatch(&mut scene, vv_scene::Command::LoadStructure { path })
+            .unwrap();
+        let id = scene.structures().next().unwrap().0;
+        (scene, id)
+    }
+
+    #[test]
+    fn a_ladder_rung_uses_the_shown_conformer_of_a_split_base() {
+        let (scene, id) = dna_with_split_atoms();
+        let loaded = scene.structure(id).unwrap();
+        let rungs = ladder_rungs(loaded, &all_keep(loaded));
+        assert_eq!(rungs, vec![[1, 4], [5, 7]]);
+        let x = loaded.structure.frame(0).positions()[rungs[0][1] as usize].x;
+        assert_eq!(x, 3.0, "the hidden N1 at 91 is not used");
     }
 
     #[test]

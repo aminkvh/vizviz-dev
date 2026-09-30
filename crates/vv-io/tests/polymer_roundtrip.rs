@@ -128,12 +128,21 @@ fn pdb_text(s: &Structure) -> String {
 #[test]
 fn identical_chains_share_an_entity_and_list_their_strands() {
     let text = cif_text(&load("4HHB.cif"));
-    let types = "_entity.type\n1 polymer\n2 polymer\n3 non-polymer\n4 non-polymer\n5 water\n";
-    assert!(text.contains(types));
+    let rows: Vec<&str> = text
+        .lines()
+        .skip_while(|l| *l != "_entity.id")
+        .skip_while(|l| l.starts_with('_'))
+        .take(5)
+        .collect();
+    let types: Vec<&str> = rows.iter().filter_map(|l| l.split(' ').nth(1)).collect();
+    assert_eq!(
+        types,
+        ["polymer", "polymer", "non-polymer", "non-polymer", "water"]
+    );
     assert!(text.contains("_entity_poly.pdbx_strand_id\n1 'polypeptide(L)' VLSPADKTNV"));
     assert!(text.contains(" A,C\n2 'polypeptide(L)' VHLTPEEKSA"));
     assert!(text.contains(" B,D\n"));
-    assert!(text.contains("3 HEM HEM\n4 PO4 PO4\n5 water HOH\n"));
+    assert!(text.contains(" HEM\n4 ") && text.contains(" PO4\n5 water HOH\n"));
     assert!(text.contains("HEM 'non-polymer'\n"));
     assert!(text.contains("VAL 'L-peptide linking'\n"));
 }
