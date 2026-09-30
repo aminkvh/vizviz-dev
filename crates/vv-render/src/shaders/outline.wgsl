@@ -9,7 +9,8 @@
 //    upsamples it and cancels its 2x2 rotation pattern without bleeding
 //    across edges). A shadow removes up to 60% of the pixel's light.
 // 2. Depth cue: fade toward the background with view depth across the
-//    scene's own depth range (`fog_near`..`fog_far`), on a linear ramp.
+//    orbit target to one zoom-scaled scene radius behind it (`fog_near`..
+//    `fog_far`), blended in display space.
 //
 // Background pixels get the vertical gradient from `background` (bottom)
 // to `background_top`; equal colours make it solid.
@@ -113,7 +114,14 @@ fn fs_outline(in: Vs) -> @location(0) vec4<f32> {
     }
     if (post.fog_strength > 0.0 && post.fog_far > post.fog_near) {
         let t = clamp((zc - post.fog_near) / (post.fog_far - post.fog_near), 0.0, 1.0);
-        rgb = mix(rgb, bg.rgb, post.fog_strength * t);
+        // Quadratic in depth: the front half, which is most of what is
+        // visible, stays nearly clean while the back still reads as far.
+        // Blended in display space: the same fraction in linear light reads
+        // far stronger (a mid tone is already most of the way to a light
+        // background), which is what washed the whole molecule out.
+        let g = vec3<f32>(2.2);
+        let mixed = mix(pow(max(rgb, vec3<f32>(0.0)), 1.0 / g), pow(bg.rgb, 1.0 / g), post.fog_strength * t * t);
+        rgb = pow(mixed, g);
     }
 
     if (post.outline_enabled == 0u) {

@@ -2617,8 +2617,10 @@ impl Renderer {
         let (fog_near, fog_far, dof_range) = match bounds {
             Some((center, radius)) => {
                 let view_dir = (camera.target - camera.eye()).normalize_or_zero();
-                let d = (center - camera.eye()).dot(view_dir);
-                let (near, far) = fog_range(d, radius);
+                let target_depth = (camera.target - camera.eye()).dot(view_dir);
+                let framed = Camera::framing(center, radius).visible_half_height();
+                let (near, far) =
+                    fog_range(target_depth, radius, camera.visible_half_height(), framed);
                 (near, far, 0.8 * radius)
             }
             None => (0.0, 0.0, 1.0),
@@ -4152,14 +4154,17 @@ pub fn read_texture_rgba8(ctx: &GpuContext, texture: &wgpu::Texture) -> Vec<u8> 
     out
 }
 
-/// View-depth range of the depth cue for a scene sphere whose centre is
-/// `center_depth` in front of the eye: clear up to the sphere's front face,
-/// fully cued 1.5 radii later. Anchored to the front face (not the centre)
-/// so an eye that closes on or enters the structure sees it clearer, and
-/// the ramp keeps its width instead of shrinking with the camera distance.
-fn fog_range(center_depth: f32, radius: f32) -> (f32, f32) {
-    let near = (center_depth - radius).max(0.0);
-    (near, near + 1.5 * radius)
+/// View-depth range of the depth cue: clear one scene `radius` in front of
+/// the orbit target (a framed structure's front face; most visible surface
+/// lies in the front half, so a ramp starting at the target would cue
+/// almost nothing), fully cued one radius behind it at framing zoom. Only
+/// the far end scales with the zoom (`visible` is the half-height on
+/// screen, `framed` its value when the scene was framed), so every depth
+/// clears as the view closes in and hazes as it pulls back, in both
+/// projections.
+fn fog_range(target_depth: f32, radius: f32, visible: f32, framed: f32) -> (f32, f32) {
+    let reach = radius * (framed / visible.max(1e-6)).clamp(0.25, 8.0);
+    (target_depth - radius, target_depth + reach)
 }
 
 #[cfg(test)]
@@ -4171,31 +4176,31 @@ mod tests {
     }
 
     #[test]
-    fn fog_leaves_the_front_face_clear_and_fogs_the_back() {
-        let range = fog_range(100.0, 10.0);
+    fn fog_runs_from_the_front_face_through_the_target_to_the_back() {
+        let range = fog_range(100.0, 10.0, 11.4, 11.4);
         assert_eq!(fog_at(90.0, range), 0.0);
-        assert!(fog_at(110.0, range) > 0.5);
+        assert!((fog_at(100.0, range) - 0.5).abs() < 1e-6);
+        assert_eq!(fog_at(110.0, range), 1.0);
     }
 
     #[test]
-    fn fog_lessens_at_a_fixed_point_as_the_eye_closes_in() {
-        let point = 60.0_f32;
-        let mut last = f32::MAX;
-        for eye_to_center in [100.0, 60.0, 30.0, 10.0, 0.0] {
-            let depth = point - (100.0 - eye_to_center);
-            if depth <= 0.0 {
-                continue;
-            }
-            let fog = fog_at(depth, fog_range(eye_to_center, 10.0));
-            assert!(fog <= last + 1e-6, "{fog} > {last} at {eye_to_center}");
-            last = fog;
+    fn zooming_in_clears_every_depth_and_zooming_out_hazes_it() {
+        for point in [95.0, 100.0, 105.0] {
+            let framed = fog_at(point, fog_range(100.0, 10.0, 11.4, 11.4));
+            let close = fog_at(point, fog_range(100.0, 10.0, 11.4 * 0.35, 11.4));
+            let far = fog_at(point, fog_range(100.0, 10.0, 11.4 * 2.0, 11.4));
+            assert!(
+                close < framed && framed < far,
+                "{point}: {close} {framed} {far}"
+            );
         }
     }
 
     #[test]
-    fn fog_ramp_width_does_not_shrink_inside_the_structure() {
-        let (near, far) = fog_range(3.0, 10.0);
-        assert_eq!(near, 0.0);
-        assert_eq!(far, 15.0);
+    fn panning_the_target_onto_a_point_lessens_its_cue() {
+        let point = 108.0;
+        let before = fog_at(point, fog_range(100.0, 10.0, 11.4, 11.4));
+        let after = fog_at(point, fog_range(108.0, 10.0, 11.4, 11.4));
+        assert!(after < before, "{after} < {before}");
     }
 }

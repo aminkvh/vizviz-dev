@@ -77,6 +77,12 @@ impl Camera {
     /// How far the eye sits from `target`: `distance` less the dolly in
     /// perspective (negative once it has passed the target); in
     /// orthographic, never inside the scene.
+    /// Half the world height on screen at the target plane, in either
+    /// projection (orthographic zoom sets it through `distance`).
+    pub fn visible_half_height(&self) -> f32 {
+        self.distance * (self.fov_y * 0.5).tan()
+    }
+
     pub fn eye_distance(&self) -> f32 {
         match self.projection {
             Projection::Perspective => self.distance - self.dolly,
