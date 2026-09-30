@@ -380,7 +380,7 @@ fn uniprot_features_mark_the_heme_histidines_of_hemoglobin() {
         },
     );
     let top = &scene.structure(id).unwrap().structure.topology;
-    let site = 4;
+    let site = 5;
     for (chain, offset, ligand) in [("A", 87, "heme b"), ("B", 92, "heme b")] {
         let r = chain_start(&scene, id, chain) + offset - 1;
         assert_eq!(top.residue_name(r as usize), "HIS");

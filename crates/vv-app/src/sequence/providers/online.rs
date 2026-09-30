@@ -18,6 +18,7 @@ fn kind_color(kind: Kind) -> u32 {
         Kind::Region => 0xB4C4DC,
         Kind::Topology => 0x3AA88A,
         Kind::Variant => 0xA0A4AB,
+        Kind::OtherSite => 0x8E7CC3,
         Kind::Modification => 0xE39B34,
         Kind::Site => 0xD1495B,
     })
@@ -71,7 +72,13 @@ impl Painter<'_> {
 
 /// What the feature track draws; variants are their own track, as there
 /// are hundreds of them.
-const FEATURE_KINDS: &[Kind] = &[Kind::Region, Kind::Topology, Kind::Modification, Kind::Site];
+const FEATURE_KINDS: &[Kind] = &[
+    Kind::Region,
+    Kind::Topology,
+    Kind::OtherSite,
+    Kind::Modification,
+    Kind::Site,
+];
 
 pub struct Variants;
 

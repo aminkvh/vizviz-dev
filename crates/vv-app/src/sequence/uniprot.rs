@@ -50,6 +50,9 @@ pub enum Kind {
     Region,
     Topology,
     Variant,
+    /// UniProt's generic "Site" (cleavage, glycation, ...): kept apart so
+    /// red means an active or binding site only.
+    OtherSite,
     Modification,
     Site,
 }
@@ -60,6 +63,7 @@ impl Kind {
             Kind::Region => "Domain, region, repeat, motif",
             Kind::Topology => "Signal, transmembrane, topology",
             Kind::Variant => "Natural variant",
+            Kind::OtherSite => "Other site",
             Kind::Modification => "Modification",
             Kind::Site => "Active or binding site",
         }
@@ -74,7 +78,8 @@ impl Kind {
             "Natural variant" => Kind::Variant,
             "Modified residue" | "Glycosylation" | "Disulfide bond" | "Lipidation"
             | "Cross-link" => Kind::Modification,
-            "Active site" | "Binding site" | "Site" => Kind::Site,
+            "Active site" | "Binding site" => Kind::Site,
+            "Site" => Kind::OtherSite,
             _ => return None,
         })
     }
