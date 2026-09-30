@@ -42,18 +42,58 @@ pub type Visible<'a> = &'a dyn Fn(u32) -> bool;
 /// Thornton 1983, J Mol Biol 168:867.
 pub const SALT_BRIDGE_DISTANCE: f32 = 4.0;
 
-/// Longest metal-to-donor distance counted as coordination, by element:
-/// the typical bond length for that metal (Harding 2006, Acta Cryst D62:
-/// 678, whose tables give ~2.0-2.3 A for Zn, Fe and Cu, 2.1 for Mg, 2.4
-/// for Ca and Na, 2.8 for K) plus about 0.5 A for coordinate error at
-/// ordinary resolution. The cutoffs are this project's rounding of that
-/// rule, not a table from the paper.
-fn coordination_cutoff(metal: Element) -> f32 {
-    match metal.atomic_number() {
-        11 | 20 => 3.0,
-        12 => 2.6,
-        19 => 3.4,
-        _ => 2.8,
+/// Metal-ligand distance statistics of high-resolution PDB entries, Zheng
+/// et al. 2008, J Inorg Biochem 102:1765-1776, Table 3 (PDB-HR): metal
+/// atomic number, ligand element, mean and SD in angstrom. Oxygen rows are
+/// the carbonyl/carboxylate/hydroxyl ligand (waters are never drawn). Fe
+/// and Cu take the wider of their two oxidation states.
+const LIGAND_DISTANCES: &[(u8, u8, f32, f32)] = &[
+    (11, 8, 2.43, 0.20),
+    (12, 8, 2.21, 0.25),
+    (19, 8, 2.76, 0.14),
+    (20, 8, 2.37, 0.12),
+    (25, 7, 2.20, 0.13),
+    (25, 8, 2.15, 0.15),
+    (26, 7, 2.16, 0.13),
+    (26, 8, 2.14, 0.19),
+    (26, 16, 2.29, 0.04),
+    (27, 7, 2.07, 0.13),
+    (27, 8, 2.09, 0.12),
+    (27, 16, 2.33, 0.03),
+    (28, 7, 1.99, 0.14),
+    (28, 8, 2.17, 0.22),
+    (28, 16, 2.24, 0.15),
+    (29, 7, 2.04, 0.15),
+    (29, 8, 2.24, 0.34),
+    (29, 16, 2.36, 0.27),
+    (30, 7, 2.07, 0.11),
+    (30, 8, 2.08, 0.20),
+    (30, 16, 2.32, 0.06),
+];
+
+/// Mean plus this many SD is the longest distance counted as coordination
+/// (this project's choice; the source gives only the distributions).
+const COORDINATION_SDS: f32 = 3.0;
+
+/// The source's own contact radius, used for metals its tables omit.
+const UNTABULATED_REACH: f32 = 3.0;
+
+fn row_cutoff(&(_, _, mean, sd): &(u8, u8, f32, f32)) -> f32 {
+    mean + COORDINATION_SDS * sd
+}
+
+/// The longest `metal`-`donor` distance counted as coordination. A pairing
+/// the tables lack (Mn-S, Ca-N, ...) takes the metal's widest tabulated
+/// cutoff: rare pairings still show, without the looser untabulated reach.
+fn coordination_cutoff(metal: Element, donor: Element) -> f32 {
+    let (m, d) = (metal.atomic_number(), donor.atomic_number());
+    let rows = || LIGAND_DISTANCES.iter().filter(move |row| row.0 == m);
+    match rows().find(|row| row.1 == d) {
+        Some(row) => row_cutoff(row),
+        None => rows()
+            .map(row_cutoff)
+            .reduce(f32::max)
+            .unwrap_or(UNTABULATED_REACH),
     }
 }
 
@@ -111,7 +151,10 @@ pub fn metal_coordination(
         .filter(|&a| visible(a))
         .filter(|&a| element[a as usize].is_metal() || is_donor(element[a as usize]))
         .collect();
-    let reach = 3.4;
+    let reach = LIGAND_DISTANCES
+        .iter()
+        .map(|&(_, _, mean, sd)| mean + COORDINATION_SDS * sd)
+        .fold(UNTABULATED_REACH, f32::max);
     contacts_among(positions, &atoms, reach)
         .into_iter()
         .filter_map(|c| {
@@ -123,7 +166,7 @@ pub fn metal_coordination(
                 (false, true) => (c.b, c.a),
                 _ => return None,
             };
-            let near = c.distance <= coordination_cutoff(element[m as usize]);
+            let near = c.distance <= coordination_cutoff(element[m as usize], element[d as usize]);
             let other = residue_of(topology, m) != residue_of(topology, d);
             (near && other && !in_water(topology, d)).then_some([m, d])
         })
@@ -163,4 +206,24 @@ pub fn salt_bridges(topology: &Topology, positions: &[Vec3], visible: Visible) -
         }
     }
     best.into_values().map(|(_, pair)| pair).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cutoff(metal: u8, donor: u8) -> f32 {
+        let e = |z| Element::from_atomic_number(z).unwrap();
+        coordination_cutoff(e(metal), e(donor))
+    }
+
+    #[test]
+    fn an_untabulated_pairing_takes_the_metals_widest_cutoff() {
+        let mn_n: f32 = 2.20 + 3.0 * 0.13;
+        let mn_o = 2.15 + 3.0 * 0.15;
+        assert!((cutoff(25, 16) - mn_n.max(mn_o)).abs() < 1e-5, "Mn-S");
+        assert!((cutoff(20, 7) - (2.37 + 3.0 * 0.12)).abs() < 1e-5, "Ca-N");
+        assert!((cutoff(30, 16) - (2.32 + 3.0 * 0.06)).abs() < 1e-5, "Zn-S");
+        assert_eq!(cutoff(79, 16), UNTABULATED_REACH, "Au is untabulated");
+    }
 }

@@ -361,7 +361,7 @@ const GLYCAN_SIZE: RepOption = option("size", "Shape size", 4.0, 1.5, 8.0, " Å"
 /// source script's icon preset does by zeroing its own cylinder radius.
 const GLYCAN_RADIUS: RepOption = option("radius", "Linkage radius", 0.5, 0.0, 1.5, " Å");
 
-/// How a cartoon draws each nucleotide's base: a stick to the pairing
+/// How a cartoon or tube draws each nucleotide's base: a stick to the pairing
 /// atom, a plate on its ring atoms (default), or one rung per base pair.
 const BASES: RepOption = choice("bases", "Bases", 1, &["stick", "plate", "ladder"]);
 const LIGANDS: RepOption = choice("ligands", "Ligands, cofactors", 1, ON_OFF);
@@ -394,6 +394,7 @@ impl Representation {
                 PUTTY,
                 TUBE,
                 TUBE_RADIUS_MIN,
+                BASES,
                 LIGANDS,
                 IONS,
                 GLYCANS,

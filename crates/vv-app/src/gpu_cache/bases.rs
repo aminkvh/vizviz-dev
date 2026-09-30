@@ -1,4 +1,4 @@
-//! A cartoon's nucleotide bases (`vv_core::bases`): slabs on the ring
+//! A cartoon's or tube's nucleotide bases (`vv_core::bases`): slabs on the ring
 //! atoms with a stick to the sugar, one rung per base pair, or the plain
 //! stick to the pairing atom.
 
@@ -12,18 +12,31 @@ use vv_render::GlycanGpu;
 const STICK: f32 = 0.2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BaseStyle {
+pub(crate) enum BaseShape {
     Stick,
     Plate,
     Ladder,
 }
 
+/// How a rep draws its bases: the shape, and whether slabs take the
+/// base's identity colour instead of the rep's colour at the glycosidic
+/// atom (per-element coloring would make every slab nitrogen blue).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BaseStyle {
+    shape: BaseShape,
+    by_identity: bool,
+}
+
 impl BaseStyle {
     pub(crate) fn of(rep: &Rep) -> Self {
-        match rep.option("bases").unwrap_or(1.0) as usize {
-            0 => BaseStyle::Stick,
-            2 => BaseStyle::Ladder,
-            _ => BaseStyle::Plate,
+        let shape = match rep.option("bases").unwrap_or(1.0) as usize {
+            0 => BaseShape::Stick,
+            2 => BaseShape::Ladder,
+            _ => BaseShape::Plate,
+        };
+        Self {
+            shape,
+            by_identity: rep.coloring == vv_scene::ColorScheme::Element,
         }
     }
 }
@@ -82,7 +95,8 @@ pub(super) fn stick_rungs(loaded: &LoadedStructure, keep: &Option<Vec<bool>>) ->
         .collect()
 }
 
-/// Slab colours are `colors` at each base's glycosidic atom.
+/// Slab colours are `colors` at each base's glycosidic atom, or the
+/// nucleotide identity colours when `style` asks for them.
 pub(crate) fn parts(
     loaded: &LoadedStructure,
     keep: &Option<Vec<bool>>,
@@ -93,17 +107,27 @@ pub(crate) fn parts(
     let coords = loaded.structure.frame(frame);
     let positions = coords.positions();
     let mut plates = PolytopeMesh::default();
-    let rungs = match style {
-        BaseStyle::Stick => stick_rungs(loaded, keep),
-        BaseStyle::Plate => {
+    let rungs = match style.shape {
+        BaseShape::Stick => stick_rungs(loaded, keep),
+        BaseShape::Plate => {
             let all = kept_bases(loaded, keep, positions);
+            let identity;
+            let plate_colors = if style.by_identity {
+                identity = vv_render::colors_for(
+                    vv_render::ColorScheme::Nucleotide,
+                    &loaded.structure.topology,
+                );
+                &identity
+            } else {
+                colors
+            };
             for base in &all {
-                let color = unpack(colors[base.glycosidic as usize]);
+                let color = unpack(plate_colors[base.glycosidic as usize]);
                 bases::push_plate(base, positions, color, &mut plates);
             }
             bases::connectors(&all)
         }
-        BaseStyle::Ladder => {
+        BaseShape::Ladder => {
             let all = kept_bases(loaded, keep, positions);
             bases::ladder(&all, &bases::pairs(&all, positions))
         }
@@ -119,7 +143,7 @@ struct Plates {
     bindings: CartoonBindings,
 }
 
-/// A cartoon's bases on the GPU.
+/// A cartoon's or tube's bases on the GPU.
 #[derive(Default)]
 pub(super) struct Bases {
     plates: Option<Plates>,
@@ -163,9 +187,27 @@ impl Bases {
         self.sticks.as_ref()
     }
 
-    /// The slab mesh and its bindings, when there are slabs to draw.
-    pub(super) fn plates(&self) -> Option<(&GlycanGpu, &CartoonBindings)> {
-        self.plates.as_ref().map(|p| (&p.gpu, &p.bindings))
+    /// The slab mesh as a draw item with its pick source, when there are
+    /// slabs to draw.
+    pub(super) fn plates_draw(
+        &self,
+        id: StructureId,
+        rep: RepId,
+        material: vv_render::Material,
+    ) -> Option<(DrawSource, CartoonItem<'_>)> {
+        let p = self.plates.as_ref()?;
+        let source = DrawSource {
+            id,
+            rep,
+            atom_map: Some(p.gpu.source.clone()),
+            bond_atoms: None,
+        };
+        let item = CartoonItem {
+            mesh: vv_render::CartoonMesh::Glycan(&p.gpu),
+            bindings: &p.bindings,
+            material,
+        };
+        Some((source, item))
     }
 }
 
@@ -197,5 +239,17 @@ pub(crate) fn push_traced(
         sticks.real_pairs.iter().copied(),
         sizes.bond_radius,
         material,
+    );
+}
+
+/// Pick spheres for the stem sticks, so a click on one names its atoms.
+pub(super) fn push_stick_proxies(bases: &Bases, positions: &[Vec3], out: &mut Vec<(Vec3, f32)>) {
+    let Some(sticks) = bases.sticks() else { return };
+    let radius = stick_sizes().atom_radius(0.0);
+    out.extend(
+        sticks
+            .atom_map
+            .iter()
+            .map(|&a| (positions[a as usize], radius)),
     );
 }

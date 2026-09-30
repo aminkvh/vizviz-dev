@@ -357,7 +357,7 @@ pub const SPECS: &[Spec] = &[
         id: "interactions",
         title: "Interactions",
         keywords: &["hbond", "hydrogen", "metal", "coordination", "salt", "bridge", "dashes"],
-        usage: "interactions [hbond|metal|saltbridge on|off]",
+        usage: "interactions [hbond|metal|saltbridge on|off] [id]",
         help: "Draw dashed lines for hydrogen bonds, metal coordination or salt bridges of the current structure. Alone, lists which are on.",
     },
     Spec {
@@ -1470,8 +1470,8 @@ pub fn run_line(
             Ok(lines.join("\n"))
         }
         "interactions" => {
-            let id = current(scene)?;
             if rest.is_empty() {
+                let id = current(scene)?;
                 let on = &scene.structure(id).expect("current exists").interactions;
                 let names: Vec<&str> = on.iter().map(|k| k.name()).collect();
                 return Ok(if names.is_empty() {
@@ -1480,7 +1480,9 @@ pub fn run_line(
                     names.join(", ")
                 });
             }
-            let (kind, state) = split_verb(rest);
+            let (kind, tail) = split_verb(rest);
+            let (state, id_word) = split_verb(tail);
+            let id = resolve_structure(scene, id_word)?;
             let kind = vv_core::interactions::InteractionKind::parse(kind)
                 .ok_or_else(|| usage("interactions"))?;
             let on = match state {
@@ -1929,6 +1931,9 @@ mod tests {
             .unwrap()
             .contains("bases = plate (stick|plate|ladder;"));
         assert_eq!(run("repopt bases ladder").unwrap(), "bases = ladder");
+        run("rep tube").unwrap();
+        assert_eq!(run("repopt bases ladder").unwrap(), "bases = ladder");
+        run("rep cartoon").unwrap();
         assert_eq!(run("repopt ions off").unwrap(), "ions = off");
         assert_eq!(run("repopt water 1").unwrap(), "water = on");
         assert!(run("repopt bases sideways").is_err());

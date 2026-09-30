@@ -566,6 +566,7 @@ struct TubeGeometry {
     /// their radii: fixed, like `plan`'s.
     caps: Option<Derived>,
     cap_radii: Vec<f32>,
+    bases: Bases,
     companions: Companions,
 }
 
@@ -697,6 +698,8 @@ fn build_tube(
     let bindings = renderer.bind_cartoon(&gpu);
     let ends = plan.mesh(&spline).loose_ends();
     let (caps, cap_radii) = build_tube_caps(ctx, renderer, structure, frame, &ends, all_colors);
+    let style = bases::BaseStyle::of(rep);
+    let bases = Bases::build(ctx, renderer, loaded, &keep, frame, all_colors, style)?;
     let companions = Companions::build(
         ctx, renderer, loaded, rep, &keep, frame, all_colors, adjacency,
     );
@@ -706,12 +709,20 @@ fn build_tube(
         bindings,
         caps,
         cap_radii,
+        bases,
         companions,
     })
 }
 
 impl TubeGeometry {
-    fn set_frame(&self, ctx: &GpuContext, loaded: &LoadedStructure, frame: usize) {
+    fn set_frame(
+        &mut self,
+        ctx: &GpuContext,
+        renderer: &Renderer,
+        loaded: &LoadedStructure,
+        bases_of: (&Option<Vec<bool>>, bases::BaseStyle, &[u32]),
+        frame: usize,
+    ) {
         let structure = &loaded.structure;
         let spline = self.plan.frame(loaded.drawn_positions(frame).positions());
         self.gpu.set_frame(ctx, &spline);
@@ -725,6 +736,9 @@ impl TubeGeometry {
                 .collect();
             caps.gpu.set_instances(ctx, &pos, &self.cap_radii);
         }
+        let (keep, style, colors) = bases_of;
+        self.bases =
+            Bases::build(ctx, renderer, loaded, keep, frame, colors, style).unwrap_or_default();
         self.companions.set_frame(ctx, structure, frame);
     }
 }
@@ -1030,7 +1044,7 @@ enum RepGeometry {
     },
     /// Some atoms, as their own spheres and cylinders.
     SomeAtoms(Derived),
-    Tube(TubeGeometry),
+    Tube(Box<TubeGeometry>),
     Cartoon(CartoonEntry),
     Gaussian(GaussianSurfaceEntry),
     Skin(SkinSurfaceEntry),
@@ -1239,6 +1253,7 @@ fn occlusion_proxies(
                         .map(|(&a, &r)| (positions[a as usize], r)),
                 );
             }
+            bases::push_stick_proxies(&t.bases, positions, out);
             t.companions.proxies(positions, elements, out);
         }
         RepGeometry::Cartoon(c) => {
@@ -1253,15 +1268,7 @@ fn occlusion_proxies(
                     .filter(|(&a, _)| keep.as_ref().is_none_or(|k| k[a as usize]))
                     .map(|(_, &p)| (p, radius)),
             );
-            if let Some(sticks) = c.bases.sticks() {
-                let radius = bases::stick_sizes().atom_radius(0.0);
-                out.extend(
-                    sticks
-                        .atom_map
-                        .iter()
-                        .map(|&a| (positions[a as usize], radius)),
-                );
-            }
+            bases::push_stick_proxies(&c.bases, positions, out);
             c.companions.proxies(positions, elements, out);
         }
         RepGeometry::Glycan(g) => {
@@ -1758,10 +1765,12 @@ impl GpuCache {
             // A recolor rebuilds the mesh from scratch, like Cartoon:
             // `CartoonGpu` has no incremental recolor (its sections'
             // colors are baked in at upload).
-            SceneRepresentation::Tube => match &r.geometry {
+            SceneRepresentation::Tube => match &mut r.geometry {
                 RepGeometry::Tube(t) if !recolor => {
                     if moved {
-                        t.set_frame(ctx, loaded, frame);
+                        let keep = keep_mask(&r.atoms, structure.atom_count());
+                        let style = bases::BaseStyle::of(rep);
+                        t.set_frame(ctx, renderer, loaded, (&keep, style, &colors()), frame);
                     }
                 }
                 _ => {
@@ -1777,7 +1786,7 @@ impl GpuCache {
                         frame,
                         adjacency.as_deref(),
                     ) {
-                        Ok(geometry) => r.geometry = RepGeometry::Tube(geometry),
+                        Ok(geometry) => r.geometry = RepGeometry::Tube(Box::new(geometry)),
                         Err(OutOfGpuMemory) => {
                             r.geometry = RepGeometry::Pending;
                             r.failed = true;
@@ -2289,6 +2298,13 @@ impl GpuCache {
                                 AtomSizes::of(GpuRepresentation::Spacefill),
                             );
                         }
+                        if let Some((source, item)) = t.bases.plates_draw(id, rep.id, material) {
+                            cartoon_sources.push(source);
+                            cartoons.push(item);
+                        }
+                        if let Some(sticks) = t.bases.sticks() {
+                            derived(sticks, GpuRepresentation::Sticks, bases::stick_sizes());
+                        }
                         for (d, representation, sizes) in t.companions.draw() {
                             derived(d, representation, sizes);
                         }
@@ -2307,18 +2323,9 @@ impl GpuCache {
                                 material,
                             });
                         }
-                        if let Some((plates, bindings)) = c.bases.plates() {
-                            cartoon_sources.push(DrawSource {
-                                id,
-                                rep: rep.id,
-                                atom_map: Some(plates.source.clone()),
-                                bond_atoms: None,
-                            });
-                            cartoons.push(CartoonItem {
-                                mesh: vv_render::CartoonMesh::Glycan(plates),
-                                bindings,
-                                material,
-                            });
+                        if let Some((source, item)) = c.bases.plates_draw(id, rep.id, material) {
+                            cartoon_sources.push(source);
+                            cartoons.push(item);
                         }
                         if let Some(sticks) = c.bases.sticks() {
                             derived(sticks, GpuRepresentation::Sticks, bases::stick_sizes());

@@ -74,3 +74,50 @@ fn hemoglobin_has_salt_bridges_and_no_bridge_pairs_a_residue_with_itself() {
         );
     }
 }
+
+#[test]
+fn zinc_fingers_bind_two_cysteines_and_two_histidines_each() {
+    let path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/real/1ZAA.cif");
+    if !path.exists() {
+        eprintln!("skipped: fixtures/real/1ZAA.cif absent");
+        return;
+    }
+    let s = vv_io::load(path).unwrap();
+    let coords = s.frame(0);
+    let positions = coords.positions();
+    let contacts = metal_coordination(&s.topology, positions, &|_| true);
+    let zincs: Vec<u32> = (0..s.topology.atom_count() as u32)
+        .filter(|&a| s.topology.element[a as usize].atomic_number() == 30)
+        .collect();
+    assert_eq!(zincs.len(), 3);
+    for zn in zincs {
+        let mut ligands: Vec<String> = contacts
+            .iter()
+            .filter(|[m, _]| *m == zn)
+            .map(|[_, d]| s.topology.atom_name(*d as usize).to_string())
+            .collect();
+        ligands.sort();
+        assert_eq!(ligands, ["NE2", "NE2", "SG", "SG"], "{ligands:?}");
+    }
+}
+
+#[test]
+fn no_contact_is_farther_than_its_cutoff_and_a_far_donor_is_left_out() {
+    let s = fixture("4HHB.cif");
+    let coords = s.frame(0);
+    let positions = coords.positions();
+    let contacts = metal_coordination(&s.topology, positions, &|_| true);
+    for [m, d] in &contacts {
+        let distance = positions[*m as usize].distance(positions[*d as usize]);
+        assert!(distance < 2.6, "{distance}");
+    }
+    let iron = contacts[0][0];
+    let far = (0..s.topology.atom_count() as u32).find(|&a| {
+        let z = s.topology.element[a as usize].atomic_number();
+        let d = positions[iron as usize].distance(positions[a as usize]);
+        matches!(z, 7 | 8 | 16) && (2.6..4.5).contains(&d)
+    });
+    let far = far.expect("a donor 2.6-4.5 A from the iron");
+    assert!(!contacts.contains(&[iron, far]));
+}

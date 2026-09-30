@@ -1559,18 +1559,95 @@ fn write_screenshot(
     }
 }
 
-/// Builds the SVG document for `export_svg` -- pure CPU math over
-/// `Scene`/`Camera` with no GPU dependency at all, split out from the
-/// `State` method so it's directly unit-testable without a wgpu device.
-/// Returns the document and the number of atoms actually drawn (for the
-/// log line). See `State::export_svg`'s doc comment for the algorithm and
-/// its stated phase-2 cuts.
 struct SvgCircle {
     x: f32,
     y: f32,
     r: f32,
     depth: f32,
     color: [u8; 3],
+}
+
+/// One dash of the interaction overlay, projected: a stroked segment.
+struct SvgDash {
+    from: (f32, f32),
+    to: (f32, f32),
+    width: f32,
+    depth: f32,
+    color: [u8; 3],
+}
+
+/// Every dash of every structure's interaction overlay, projected at the
+/// same scale as [`atom_circles`]; a dash with an end behind the camera is
+/// dropped.
+fn interaction_dashes(
+    scene: &Scene,
+    view_proj: vv_core::glam::Mat4,
+    proj_scale: f32,
+    width: f32,
+    height: f32,
+) -> Vec<SvgDash> {
+    let mut out = Vec::new();
+    for (_id, loaded) in scene.structures() {
+        let frame = loaded
+            .frame
+            .min(loaded.structure.frame_count().saturating_sub(1));
+        for dash in crate::gpu_cache::interactions::dashes(loaded, frame) {
+            let a = project_to_pixel(view_proj, width, height, dash.from);
+            let b = project_to_pixel(view_proj, width, height, dash.to);
+            let (Some((ax, ay, ad)), Some((bx, by, bd))) = (a, b) else {
+                continue;
+            };
+            if ad <= 0.0 || bd <= 0.0 {
+                continue;
+            }
+            let depth = 0.5 * (ad + bd);
+            let bytes = crate::gpu_cache::interactions::color(dash.kind).to_le_bytes();
+            out.push(SvgDash {
+                from: (ax, ay),
+                to: (bx, by),
+                width: 2.0 * crate::gpu_cache::interactions::DASH_RADIUS * proj_scale / depth,
+                depth,
+                color: [bytes[0], bytes[1], bytes[2]],
+            });
+        }
+    }
+    out
+}
+
+/// A drawn primitive, so circles and dashes share one painter's order.
+enum SvgPrim {
+    Circle(SvgCircle),
+    Dash(SvgDash),
+}
+
+impl SvgPrim {
+    fn depth(&self) -> f32 {
+        match self {
+            SvgPrim::Circle(c) => c.depth,
+            SvgPrim::Dash(d) => d.depth,
+        }
+    }
+
+    fn element(&self, hex: &dyn Fn([u8; 3]) -> String) -> Box<dyn svg::Node> {
+        match self {
+            SvgPrim::Circle(c) => Box::new(
+                svg::node::element::Circle::new()
+                    .set("cx", c.x)
+                    .set("cy", c.y)
+                    .set("r", c.r)
+                    .set("fill", hex(c.color)),
+            ),
+            SvgPrim::Dash(d) => Box::new(
+                svg::node::element::Line::new()
+                    .set("x1", d.from.0)
+                    .set("y1", d.from.1)
+                    .set("x2", d.to.0)
+                    .set("y2", d.to.1)
+                    .set("stroke", hex(d.color))
+                    .set("stroke-width", d.width),
+            ),
+        }
+    }
 }
 
 /// Every atom of every loaded structure, projected to screen space at its
@@ -1629,8 +1706,8 @@ fn atom_circles(
 /// `Scene`/`Camera` with no GPU dependency at all, split out from the
 /// `State` method so it's directly unit-testable without a wgpu device.
 /// Returns the document and the number of atoms actually drawn (for the
-/// log line). See `State::export_svg`'s doc comment for the algorithm and
-/// its stated phase-2 cuts.
+/// log line). Interaction dashes are `<line>`s painted in the atoms' own
+/// depth order.
 fn build_svg_document(
     scene: &Scene,
     camera: &Camera,
@@ -1648,6 +1725,13 @@ fn build_svg_document(
     let proj_scale = proj.y_axis.y * fh * 0.5;
     let circles = atom_circles(scene, view_proj, proj_scale, fw, fh);
     let atom_count = circles.len();
+    let mut prims: Vec<SvgPrim> = circles.into_iter().map(SvgPrim::Circle).collect();
+    prims.extend(
+        interaction_dashes(scene, view_proj, proj_scale, fw, fh)
+            .into_iter()
+            .map(SvgPrim::Dash),
+    );
+    prims.sort_by(|a, b| b.depth().total_cmp(&a.depth()));
 
     let hex = |c: [u8; 3]| format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2]);
     let bg = color32_from_wgpu(background);
@@ -1663,14 +1747,8 @@ fn build_svg_document(
                 .set("height", height)
                 .set("fill", hex([bg.r(), bg.g(), bg.b()])),
         );
-    for c in &circles {
-        document = document.add(
-            svg::node::element::Circle::new()
-                .set("cx", c.x)
-                .set("cy", c.y)
-                .set("r", c.r)
-                .set("fill", hex(c.color)),
-        );
+    for prim in &prims {
+        document = document.add(prim.element(&hex));
     }
     for draw in label_draws(scene) {
         let Some((x, y, depth)) = project_to_pixel(view_proj, fw, fh, draw.world) else {
@@ -1922,5 +2000,30 @@ mod tests {
         );
         assert!(text.contains("Crambin"), "caption text missing: {text}");
         assert!(text.contains("N-term"), "label text missing: {text}");
+    }
+
+    #[test]
+    fn svg_draws_one_line_per_interaction_dash_among_the_atoms() {
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::new(10);
+        let (id, mut camera) = load_1crn_framed(&mut scene, &mut history);
+        camera.projection = vv_render::Projection::Perspective;
+        let kind = vv_core::interactions::InteractionKind::Hbond;
+        history
+            .dispatch(&mut scene, Command::SetInteraction { id, kind, on: true })
+            .unwrap();
+        let loaded = scene.structure(id).unwrap();
+        let expected = crate::gpu_cache::interactions::dashes(loaded, 0).len();
+        assert!(expected > 0);
+
+        let bg = wgpu::Color::BLACK;
+        let (document, _) = build_svg_document(&scene, &camera, 400, 300, bg);
+        let text = document.to_string();
+        assert_eq!(text.matches("<line").count(), expected);
+        let last_circle = text.rfind("<circle").unwrap();
+        assert!(
+            text.find("<line").unwrap() < last_circle,
+            "dashes not depth-sorted"
+        );
     }
 }

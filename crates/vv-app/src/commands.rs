@@ -357,7 +357,7 @@ pub const VIEW_ENTRIES: &[Entry] = &[
         title: "Save a screenshot…",
         keywords: &["png", "jpg", "jpeg", "svg", "vector", "export", "render", "image", "figure"],
         usage: "screenshot [PATH] [nossaa]",
-        help: "Write the viewport as a PNG, a JPEG if PATH ends in .jpg/.jpeg (2x supersampled unless `nossaa`), or a vector SVG if PATH ends in .svg (atoms only, as painter's-algorithm-sorted circles; no bonds/cartoon yet). With no PATH, opens the dialog.",
+        help: "Write the viewport as a PNG, a JPEG if PATH ends in .jpg/.jpeg (2x supersampled unless `nossaa`), or a vector SVG if PATH ends in .svg (atoms as painter's-algorithm-sorted circles, plus interaction dashes as lines; no bonds/cartoon yet). With no PATH, opens the dialog.",
     },
     Entry {
         id: "render",

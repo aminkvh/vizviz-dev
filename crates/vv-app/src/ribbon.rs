@@ -395,6 +395,20 @@ fn outline_on(a: &AppUi<'_>) -> bool {
 fn label_mode_on(a: &AppUi<'_>) -> bool {
     a.view.mouse_mode == crate::ui::MouseMode::Label
 }
+fn interaction_on(a: &AppUi<'_>, kind: vv_core::interactions::InteractionKind) -> bool {
+    a.current()
+        .and_then(|id| a.scene.structure(id))
+        .is_some_and(|s| s.interactions.contains(&kind))
+}
+fn hbond_on(a: &AppUi<'_>) -> bool {
+    interaction_on(a, vv_core::interactions::InteractionKind::Hbond)
+}
+fn metal_on(a: &AppUi<'_>) -> bool {
+    interaction_on(a, vv_core::interactions::InteractionKind::Metal)
+}
+fn saltbridge_on(a: &AppUi<'_>) -> bool {
+    interaction_on(a, vv_core::interactions::InteractionKind::SaltBridge)
+}
 fn framing_on(a: &AppUi<'_>) -> bool {
     *a.studio_frame
 }
@@ -863,6 +877,35 @@ pub const TABS: &[RibbonTab] = &[
                 ],
             },
             Group {
+                label: "Interactions",
+                actions: &[
+                    toggle(
+                        "H-bonds",
+                        icon::LINK_SIMPLE,
+                        "H",
+                        "interactions hbond on",
+                        "interactions hbond off",
+                        hbond_on,
+                    ),
+                    toggle(
+                        "Metal",
+                        icon::ATOM,
+                        "E",
+                        "interactions metal on",
+                        "interactions metal off",
+                        metal_on,
+                    ),
+                    toggle(
+                        "Salt bridges",
+                        icon::LIGHTNING,
+                        "B",
+                        "interactions saltbridge on",
+                        "interactions saltbridge off",
+                        saltbridge_on,
+                    ),
+                ],
+            },
+            Group {
                 label: "Reports",
                 actions: &[
                     popover(
@@ -1061,7 +1104,8 @@ enum Effect {
 
 /// Verbs that act on "the current structure" (`vv_scene::script::
 /// current`, the most recently loaded one) when given no id.
-const CURRENT_STRUCTURE_VERBS: [&str; 4] = ["rep", "representation", "color", "material"];
+const CURRENT_STRUCTURE_VERBS: [&str; 5] =
+    ["rep", "representation", "color", "material", "interactions"];
 
 /// Appends `id` (a structure's raw slot index, `StructureId::to_raw`) to
 /// `line`'s end when its verb acts on "the current structure" and an
@@ -1674,10 +1718,6 @@ mod tests {
         ("uishot", "a documentation and review tool"),
         ("window", "sets the window size for scripted layout checks"),
         ("repopt", "a Selections row's ⋯ ▸ Options…"),
-        (
-            "interactions",
-            "console only until the Analyze tab gets its switches",
-        ),
         (
             "ribbon",
             "the ribbon's own tabs and chevron are its clickable form",

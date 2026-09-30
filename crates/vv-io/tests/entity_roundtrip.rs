@@ -111,4 +111,91 @@ fn glycosylated_receptor_keeps_branch_descriptors_and_sources() {
     assert!(text.contains("_pdbx_entity_branch_descriptor."));
     assert_eq!(described(&back), before);
     assert_eq!(descriptors(&back), branch);
+    assert_eq!(branched_entities(&back), branched_entities(&s));
+}
+
+/// 6X3Z's three branched entities keep their rows and descriptors (they
+/// differ in composition; the synthetic test below covers linkage).
+#[test]
+fn same_composition_glycans_with_different_linkage_stay_separate() {
+    let path = fixture("large", "6X3Z.cif");
+    if !path.exists() {
+        eprintln!("skipping: {} is not downloaded", path.display());
+        return;
+    }
+    let s = vv_io::load(path).unwrap();
+    assert_eq!(branched_entities(&s), 3);
+    let (back, _) = round_trip(&s, "cif");
+    assert_eq!(branched_entities(&back), 3);
+    assert_eq!(descriptors(&back).len(), descriptors(&s).len());
+}
+
+fn branched_entities(s: &Structure) -> usize {
+    s.topology
+        .annotations
+        .category("pdbx_entity_branch")
+        .map_or(0, |c| c.rows.len())
+}
+
+/// A three-sugar chain `chain` with LINK records `links` as
+/// `(donor atom, residue, acceptor residue)`: each residue has C1, O3, O4.
+fn glycan_pdb(chain: char, links: &[(&str, u32, u32)], serial: &mut u32) -> String {
+    let mut out = String::new();
+    for seq in 1..=3u32 {
+        for (k, (name, el)) in [("C1", "C"), ("O3", "O"), ("O4", "O")].iter().enumerate() {
+            *serial += 1;
+            let x = 3.0 * seq as f32 + k as f32;
+            let y = if chain == 'B' { 0.0 } else { 20.0 };
+            out += &format!(
+                "HETATM{serial:5} {name:<4} NAG {chain}{seq:4}    {x:8.3}{y:8.3}{:8.3}  1.00  0.00          {el:>2}
+",
+                0.0
+            );
+        }
+    }
+    for &(atom, from, to) in links {
+        let mut line = vec![b' '; 80];
+        let mut put = |start: usize, text: &str| {
+            line[start..start + text.len()].copy_from_slice(text.as_bytes())
+        };
+        put(0, "LINK");
+        put(12, &format!("{atom:<4}"));
+        put(17, "NAG");
+        put(21, &chain.to_string());
+        put(22, &format!("{from:>4}"));
+        put(42, "C1");
+        put(47, "NAG");
+        put(51, &chain.to_string());
+        put(52, &format!("{to:>4}"));
+        out += &String::from_utf8(line).unwrap();
+        out.push('\n');
+    }
+    out
+}
+
+fn branched_rows(text: &str) -> usize {
+    text.lines()
+        .filter(|l| l.ends_with(" branched") || l.contains(" branched "))
+        .count()
+}
+
+#[test]
+fn glycans_of_one_composition_linked_differently_are_two_entities() {
+    let mut serial = 0;
+    let mut pdb = glycan_pdb('B', &[("O4", 1, 2), ("O4", 2, 3)], &mut serial);
+    pdb += &glycan_pdb('C', &[("O4", 1, 2), ("O3", 2, 3)], &mut serial);
+    let same = glycan_pdb('D', &[("O4", 1, 2), ("O4", 2, 3)], &mut serial);
+    let path = std::env::temp_dir().join(format!("vv_glycan_link_{}.pdb", std::process::id()));
+    std::fs::write(
+        &path,
+        format!(
+            "{pdb}{same}END
+"
+        ),
+    )
+    .unwrap();
+    let s = vv_io::load(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    let (_, text) = round_trip(&s, "cif");
+    assert_eq!(branched_rows(&text), 2, "{text}");
 }

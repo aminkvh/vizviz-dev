@@ -274,16 +274,23 @@ are within 3.4 A (or with the wobble contacts N1-O2 and O6-N3), rings
 within 40 degrees of parallel and 2 A of co-planar; each base pairs at
 most once. `stick` is the older single stick to the pairing atom. Slabs
 take their colour from the rep's coloring at the glycosidic atom, so
-`color nucleotide` gives the usual per-base colours.
+`color nucleotide` gives the usual per-base colours. Under `element`
+coloring that atom is always nitrogen, so each plate is instead coloured
+by the base's identity (the nucleotide scheme). Works under cartoon and tube.
 
 ## Interaction overlay
 
 `interactions hbond|metal|saltbridge on|off` (`vv_core::interactions`,
 `gpu_cache/interactions.rs`) draws each contact as a run of short
 cylinders through the ball-and-stick pipeline, so the dashes are
-depth-tested and reach path-traced renders. Metal cutoffs are the typical
-bond length of each metal (Harding 2006, Acta Cryst D62:678) plus about
-0.5 A, a project rounding rather than a table from the paper.
+depth-tested and reach path-traced renders and SVG export (one `<line>` per dash, depth-sorted with the atoms). A metal contact is a metal to
+an N, O or S of another residue within mean + 3 SD of that metal-ligand
+pair's distance in high-resolution PDB entries (Zheng et al. 2008, J Inorg
+Biochem 102:1765-1776, Table 3, PDB-HR; e.g. Zn-N 2.40, Zn-S 2.50, Zn-O
+2.68 A). The paper gives distributions, so the 3 SD tolerance is this
+project's choice. Pairings the table lacks (Mn-S, Ca-N, ...) take that
+metal's widest tabulated cutoff; a metal the table lacks uses the paper's
+3 A contact radius.
 
 ## Transparency
 

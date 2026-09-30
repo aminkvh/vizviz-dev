@@ -454,6 +454,15 @@ fn push_tube(
         );
     }
 
+    bases::push_traced(
+        traced,
+        loaded,
+        &keep,
+        frame,
+        colors,
+        bases::BaseStyle::of(rep),
+        material,
+    );
     let coords = loaded.structure.frame(frame);
     companions::push_traced(
         traced,

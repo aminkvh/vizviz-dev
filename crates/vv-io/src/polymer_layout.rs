@@ -157,12 +157,59 @@ pub(crate) fn sequence(t: &Topology, segment: &Segment) -> Vec<InternId> {
     out
 }
 
+/// A bond between two residues of one segment: residue positions within
+/// it and the two atom names.
+type Linkage = (u32, u32, String, String);
+
+/// Per segment, the sorted inter-residue bonds inside a branched one: two
+/// glycans of one composition are one entity only when linked alike.
+fn linkages(t: &Topology, segments: &[Segment]) -> Vec<Vec<Linkage>> {
+    let mut of_residue: HashMap<u32, usize> = HashMap::new();
+    for (i, s) in segments
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.kind == Kind::Branched)
+    {
+        of_residue.extend(s.residues.clone().map(|r| (r, i)));
+    }
+    let mut out = vec![Vec::new(); segments.len()];
+    if of_residue.is_empty() {
+        return out;
+    }
+    let explicit = t.explicit_bonds.iter().map(|b| b.atoms);
+    let perceived = t.bonds.iter().flat_map(|b| b.pairs.iter().copied());
+    for [a, b] in explicit.chain(perceived) {
+        let (ra, rb) = (t.residue_index[a as usize], t.residue_index[b as usize]);
+        let (Some(&sa), Some(&sb)) = (of_residue.get(&ra), of_residue.get(&rb)) else {
+            continue;
+        };
+        if ra == rb || sa != sb {
+            continue;
+        }
+        let ((ra, a), (rb, b)) = if ra < rb {
+            ((ra, a), (rb, b))
+        } else {
+            ((rb, b), (ra, a))
+        };
+        let start = segments[sa].residues.start;
+        let name = |x: u32| t.atom_name(x as usize).to_string();
+        out[sa].push((ra - start, rb - start, name(a), name(b)));
+    }
+    for links in &mut out {
+        links.sort();
+        links.dedup();
+    }
+    out
+}
+
 /// Segments with the same kind and monomer sequence are one entity (all
-/// waters are one, a non-polymer is by its residue name).
+/// waters are one, a non-polymer is by its residue name, a branched one
+/// also by its linkage).
 fn group_entities(t: &Topology, segments: &[Segment]) -> (Vec<Entity>, Vec<usize>) {
-    let mut index: HashMap<(Kind, Vec<InternId>), usize> = HashMap::new();
+    let mut index: HashMap<(Kind, Vec<InternId>, Vec<Linkage>), usize> = HashMap::new();
     let mut entities: Vec<Entity> = Vec::new();
     let mut entity_of = Vec::with_capacity(segments.len());
+    let mut links = linkages(t, segments);
     for (i, segment) in segments.iter().enumerate() {
         let mut comps = sequence(t, segment);
         if matches!(segment.kind, Kind::Water | Kind::NonPolymer) {
@@ -173,14 +220,16 @@ fn group_entities(t: &Topology, segments: &[Segment]) -> (Vec<Entity>, Vec<usize
         } else {
             comps.clone()
         };
-        let e = *index.entry((segment.kind, key)).or_insert_with(|| {
-            entities.push(Entity {
-                kind: segment.kind,
-                comps,
-                segments: Vec::new(),
+        let e = *index
+            .entry((segment.kind, key, std::mem::take(&mut links[i])))
+            .or_insert_with(|| {
+                entities.push(Entity {
+                    kind: segment.kind,
+                    comps,
+                    segments: Vec::new(),
+                });
+                entities.len() - 1
             });
-            entities.len() - 1
-        });
         entities[e].segments.push(i);
         entity_of.push(e);
     }
