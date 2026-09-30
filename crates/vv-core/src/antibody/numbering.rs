@@ -84,8 +84,13 @@ impl Scheme {
         }
     }
 
-    /// Case-insensitive [`Self::name`].
+    /// Case-insensitive [`Self::name`]; Martin's scheme is also known as
+    /// enhanced Chothia (Abhinandan & Martin 2008).
     pub fn parse(word: &str) -> Option<Scheme> {
+        let bare: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
+        if bare.eq_ignore_ascii_case("enhancedchothia") {
+            return Some(Scheme::Martin);
+        }
         Self::ALL
             .into_iter()
             .find(|s| s.name().eq_ignore_ascii_case(word))
@@ -380,4 +385,23 @@ pub(super) fn relabel(scheme: Scheme, chain: ChainType, imgt: &[Label]) -> Vec<L
         i += run;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Scheme;
+
+    #[test]
+    fn enhanced_chothia_is_martins_scheme() {
+        for word in [
+            "martin",
+            "Martin",
+            "enhancedchothia",
+            "enhanced-chothia",
+            "Enhanced Chothia",
+        ] {
+            assert_eq!(Scheme::parse(word), Some(Scheme::Martin), "{word}");
+        }
+        assert_eq!(Scheme::parse("chothia"), Some(Scheme::Chothia));
+    }
 }

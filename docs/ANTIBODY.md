@@ -21,7 +21,7 @@ for domain in find_domains(seq) {                      // empty for non-antibodi
 | `find_domains(seq) -> Vec<Domain>` | Every antibody domain, in sequence order (an scFv gives two). Receptors are not returned. |
 | `find_variable_domains(seq)` | The same, plus `TcrAlpha` and `TcrBeta` domains. Each domain goes to the profile it fits best. |
 | `Domain::{chain, start, end, score, confidence}` | `confidence` is the alignment score over a perfect framework match (0 to 1). Antibodies are reported from 0.30 (real ones sit at 0.42 to 0.97), receptors from 0.15. |
-| `Domain::numbering(Scheme) -> Vec<(usize, Label)>` | `Scheme` is `Imgt`, `Kabat`, `Chothia`, `Martin` or `Aho`. IMGT insertion letters stand for `.1`, `.2`, ... (`112A` is 112.1). Receptors are always numbered in IMGT. |
+| `Domain::numbering(Scheme) -> Vec<(usize, Label)>` | `Scheme` is `Imgt`, `Kabat`, `Chothia`, `Martin` (enhanced Chothia, Abhinandan & Martin 2008) or `Aho`. IMGT insertion letters stand for `.1`, `.2`, ... (`112A` is 112.1). Receptors are always numbered in IMGT. |
 | `Domain::annotate(Scheme, CdrDefinition) -> Vec<Annotation>` | Label plus `Region`, with CDR edges from `Kabat`, `Chothia`, `Imgt`, `Contact` or `North`. The two choices are independent; receptors use the IMGT loops. |
 | `find_domains_with(seq, min_confidence)` | Same, with your own cutoff. |
 | `find_in_residues(&Topology, range)` | Domains of a chain's protein residues; offsets are from the range start. |
@@ -330,7 +330,7 @@ The cache is per `Topology` and starts empty on a clone; edit `chains` or
 
 ## Not done
 
-- **Wolfguy** and the AHo columns for receptors are not implemented.
+- The AHo columns for receptors are not implemented.
 - **Gamma and delta receptor chains** have no profile (see above).
 - Profiles come from PDB Fabs and nanobodies (mostly human, mouse, camelid,
   some rabbit) and from human and mouse receptors; shark VNAR and unusual
