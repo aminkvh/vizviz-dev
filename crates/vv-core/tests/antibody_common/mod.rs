@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use vv_core::antibody::{Domain, Label};
+use vv_core::antibody::{find_domains, ChainType, Domain, Label, Scheme};
 
 pub struct Residue {
     pub label: Label,
@@ -90,10 +90,16 @@ pub fn read_chains(path: &Path) -> Vec<Chain> {
         .collect()
 }
 
+/// `fixtures/real`, or `$VIZVIZ_FIXTURES_REAL` (worktrees keep the data in the main checkout).
+pub fn fixtures_root() -> PathBuf {
+    std::env::var_os("VIZVIZ_FIXTURES_REAL").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/real"),
+        PathBuf::from,
+    )
+}
+
 pub fn fixtures(dir: &str) -> Vec<(String, PathBuf)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/real")
-        .join(dir);
+    let root = fixtures_root().join(dir);
     let mut files: Vec<(String, PathBuf)> = std::fs::read_dir(root)
         .map(|entries| {
             entries
@@ -106,6 +112,29 @@ pub fn fixtures(dir: &str) -> Vec<(String, PathBuf)> {
         .unwrap_or_default();
     files.sort();
     files
+}
+
+/// Everything `find_domains` reports for a sequence, scores as raw bits so
+/// that two runs compare exactly.
+pub type Fingerprint = Vec<(ChainType, usize, usize, u32, Vec<Vec<(usize, Label)>>)>;
+
+pub fn fingerprint(sequence: &str) -> Fingerprint {
+    find_domains(sequence)
+        .iter()
+        .map(|d| {
+            let numbered = Scheme::ALL.iter().map(|&s| d.numbering(s)).collect();
+            (d.chain, d.start, d.end, d.score.to_bits(), numbered)
+        })
+        .collect()
+}
+
+/// Runs `work` on a rayon pool of exactly `threads` threads.
+pub fn in_pool<T: Send>(threads: usize, work: impl FnOnce() -> T + Send) -> T {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .expect("thread pool")
+        .install(work)
 }
 
 /// Polymer name of each chain from the `COMPND` records.

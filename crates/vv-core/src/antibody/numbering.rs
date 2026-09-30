@@ -155,14 +155,30 @@ enum Span {
     /// One label per IMGT position, `number = imgt + offset`.
     Fixed { lo: u16, hi: u16, offset: i16 },
     /// Residues counted, not indexed: `base` labels, insertions lettered
-    /// after `ins_after`, deletions taken in `delete` order.
+    /// after `ins_after`, deletions taken in `delete` order after any
+    /// labels `gaps` takes from the aligner.
     Var {
         lo: u16,
         hi: u16,
         base: (u16, u16),
         ins_after: u16,
         delete: &'static [u16],
+        gaps: Gaps,
     },
+}
+
+/// Which empty base columns of a counted stretch the aligner decides.
+#[derive(Clone, Copy)]
+enum Gaps {
+    /// None: `delete` alone orders the deletions.
+    Canonical,
+    /// Every empty column of the table `(lo, hi, offset)`.
+    Aligner(&'static [(u16, u16, i16)]),
+    /// Only the columns before the first residue (an N-terminal truncation).
+    Leading(&'static [(u16, u16, i16)]),
+    /// The empty column of the table when exactly one is empty; with more,
+    /// `delete` orders them.
+    Single(&'static [(u16, u16, i16)]),
 }
 
 const fn fixed(lo: u16, hi: u16, offset: i16) -> Span {
@@ -176,6 +192,46 @@ const fn var(lo: u16, hi: u16, base: (u16, u16), ins_after: u16, delete: &'stati
         base,
         ins_after,
         delete,
+        gaps: Gaps::Canonical,
+    }
+}
+
+/// Counted framework stretch: insertions after `ins_after`, deletions as
+/// `gaps` and `delete` say.
+const fn counted(
+    lo: u16,
+    hi: u16,
+    base: (u16, u16),
+    ins_after: u16,
+    gaps: Gaps,
+    delete: &'static [u16],
+) -> Span {
+    Span::Var {
+        lo,
+        hi,
+        base,
+        ins_after,
+        delete,
+        gaps,
+    }
+}
+
+/// FR1 of either chain: the aligner fixes where the chain starts, `delete`
+/// where the residues missing inside it were.
+const fn framework1(
+    hi: u16,
+    base_hi: u16,
+    columns: &'static [(u16, u16, i16)],
+    ins_after: u16,
+    delete: &'static [u16],
+) -> Span {
+    Span::Var {
+        lo: 1,
+        hi,
+        base: (1, base_hi),
+        ins_after,
+        delete,
+        gaps: Gaps::Leading(columns),
     }
 }
 
@@ -198,9 +254,23 @@ const L1_MARTIN: &[u16] = &[30, 29, 28, 27, 26, 25, 31, 32, 33, 34];
 const L2_DELETE: &[u16] = &[54, 53, 55, 52, 56, 51, 50];
 const L2_MARTIN: &[u16] = &[52, 51, 50, 53, 54, 55, 56];
 const L3_DELETE: &[u16] = &[95, 94, 93, 92, 91, 90, 89];
-/// Martin heavy FR2 (Abhinandan & Martin 2008 name H42; the depositions
-/// measured here delete from H44).
-const H_FR2_MARTIN: &[u16] = &[44, 43, 42, 41, 40, 39, 38, 37, 36];
+/// Heavy FR2 with two or more residues missing, in every scheme (the
+/// published Martin site is H42; the reference program deletes from H44).
+const H_FR2_DELETE: &[u16] = &[44, 43, 42, 41, 40, 39, 38, 37, 36];
+/// Where FR1 loses residues inside the chain: light chains at 10 (Kabat,
+/// Chothia) or 7 (Martin), heavy chains at 10 in all three; then spreading
+/// away from that site.
+const L_FR1_KABAT: &[u16] = &[10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
+const L_FR1_MARTIN: &[u16] = &[7, 6, 5, 4, 3, 2, 1];
+const H_FR1_DELETE: &[u16] = &[10, 9, 11, 8, 12, 7, 6, 5, 4, 3, 2, 1];
+
+/// Framework stretches of the IMGT frame that carry base labels, as
+/// `(first IMGT column, last, offset)`. Heavy IMGT 10 has no Kabat label.
+const LIGHT_FR1: &[(u16, u16, i16)] = &[(1, 23, 0)];
+const HEAVY_FR1: &[(u16, u16, i16)] = &[(1, 9, 0), (11, 26, -1)];
+const HEAVY_FR2: &[(u16, u16, i16)] = &[(41, 54, -5)];
+const HEAVY_FR3: &[(u16, u16, i16)] = &[(75, 91, -9), (95, 104, -12)];
+const LIGHT_FR3: &[(u16, u16, i16)] = &[(70, 72, -13), (74, 80, -14), (83, 104, -16)];
 
 fn heavy_spans(scheme: Scheme) -> Vec<Span> {
     if scheme == Scheme::Martin {
@@ -211,17 +281,13 @@ fn heavy_spans(scheme: Scheme) -> Vec<Span> {
         _ => (31, H1_CHOTHIA),
     };
     vec![
-        fixed(1, 9, 0),
-        extra(10, 10, 9),
-        fixed(11, 26, -1),
+        framework1(26, 25, HEAVY_FR1, 9, H_FR1_DELETE),
         var(27, 40, (26, 35), h1_ins, h1_delete),
-        fixed(41, 54, -5),
+        counted(41, 54, (36, 49), 49, Gaps::Single(HEAVY_FR2), H_FR2_DELETE),
         var(55, 74, (50, 65), 52, H2_DELETE),
-        fixed(75, 91, -9),
-        extra(92, 94, 82),
-        fixed(95, 104, -12),
+        counted(75, 104, (66, 92), 82, Gaps::Aligner(HEAVY_FR3), &[]),
         var(105, 117, (93, 102), 100, H3_DELETE),
-        fixed(118, 128, -15),
+        var(118, 128, (103, 113), 113, &[]),
     ]
 }
 
@@ -229,80 +295,69 @@ fn heavy_spans(scheme: Scheme) -> Vec<Span> {
 /// H8, the FR2 deletion and the H72 insertion Kabat puts at H82.
 fn martin_heavy_spans() -> Vec<Span> {
     vec![
-        fixed(1, 7, 0),
-        var(8, 10, (8, 9), 8, &[8]),
-        fixed(11, 26, -1),
+        framework1(26, 25, HEAVY_FR1, 8, H_FR1_DELETE),
         var(27, 40, (26, 35), 31, H1_CHOTHIA),
-        var(41, 54, (36, 49), 49, H_FR2_MARTIN),
+        counted(41, 54, (36, 49), 49, Gaps::Single(HEAVY_FR2), H_FR2_DELETE),
         var(55, 74, (50, 65), 52, H2_DELETE),
-        var(75, 104, (66, 92), 72, &[]),
+        counted(75, 104, (66, 92), 72, Gaps::Aligner(HEAVY_FR3), &[]),
         var(105, 117, (93, 102), 100, H3_DELETE),
-        fixed(118, 128, -15),
+        var(118, 128, (103, 113), 113, &[]),
     ]
 }
 
-fn light_spans(scheme: Scheme, lambda: bool) -> Vec<Span> {
+fn light_spans(scheme: Scheme, lambda_j: bool) -> Vec<Span> {
     if scheme == Scheme::Martin {
-        return martin_light_spans(lambda);
+        return martin_light_spans(lambda_j);
     }
     let (l1_ins, l1_delete) = match scheme {
         Scheme::Kabat => (27, L1_KABAT),
         _ => (30, L1_CHOTHIA),
     };
-    let mut spans = if lambda {
-        vec![fixed(1, 9, 0), extra(10, 10, 9), fixed(11, 23, 0)]
-    } else {
-        vec![fixed(1, 23, 0)]
-    };
+    let mut spans = vec![framework1(23, 23, LIGHT_FR1, 9, L_FR1_KABAT)];
     spans.extend([
         var(24, 40, (24, 34), l1_ins, l1_delete),
         fixed(41, 55, -6),
         var(56, 69, (50, 56), 54, L2_DELETE),
-        fixed(70, 72, -13),
-        extra(73, 73, 59),
-        fixed(74, 80, -14),
-        extra(81, 82, 66),
-        fixed(83, 104, -16),
+        counted(70, 104, (57, 88), 66, Gaps::Aligner(LIGHT_FR3), &[]),
         var(105, 117, (89, 97), 95, L3_DELETE),
     ]);
-    spans.extend(lambda_fr4(lambda));
+    spans.extend(lambda_fr4(lambda_j));
     spans
 }
 
 /// Chothia plus the indel sites at L7 (lambda FR1), L40A/L41, L68 and
 /// the shifted L1 and L2 deletions.
-fn martin_light_spans(lambda: bool) -> Vec<Span> {
+fn martin_light_spans(lambda_j: bool) -> Vec<Span> {
     let mut spans = vec![
-        fixed(1, 6, 0),
-        var(7, 10, (7, 10), 10, &[7]),
-        fixed(11, 23, 0),
+        framework1(23, 23, LIGHT_FR1, 10, L_FR1_MARTIN),
         var(24, 40, (24, 34), 30, L1_MARTIN),
         var(41, 55, (35, 49), 40, &[41]),
         var(56, 69, (50, 56), 52, L2_MARTIN),
-        var(70, 104, (57, 88), 68, &[68]),
+        counted(70, 104, (57, 88), 68, Gaps::Aligner(LIGHT_FR3), &[68]),
         var(105, 117, (89, 97), 95, L3_DELETE),
     ];
-    spans.extend(lambda_fr4(lambda));
+    spans.extend(lambda_fr4(lambda_j));
     spans
 }
 
-/// Kabat's lambda FR4 carries 106A; kappa runs straight through.
-fn lambda_fr4(lambda: bool) -> Vec<Span> {
-    match lambda {
+/// Lambda J segments carry 106A; kappa chains and kappa-type J segments
+/// (Lys or Arg at IMGT 127) run straight through.
+fn lambda_fr4(lambda_j: bool) -> Vec<Span> {
+    match lambda_j {
         true => vec![
             fixed(118, 126, -20),
             extra(127, 127, 106),
             fixed(128, 128, -21),
         ],
-        false => vec![fixed(118, 128, -20)],
+        false => vec![var(118, 128, (98, 108), 108, &[])],
     }
 }
 
-fn spans(scheme: Scheme, chain: ChainType) -> Vec<Span> {
+fn spans(scheme: Scheme, chain: ChainType, lambda_j: bool) -> Vec<Span> {
     match chain {
         ChainType::Heavy => heavy_spans(scheme),
         ChainType::Kappa => light_spans(scheme, false),
-        ChainType::Lambda => light_spans(scheme, true),
+        ChainType::Lambda => light_spans(scheme, lambda_j),
         ChainType::TcrAlpha | ChainType::TcrBeta => Vec::new(),
     }
 }
@@ -339,6 +394,40 @@ fn var_labels(base: (u16, u16), ins_after: u16, delete: &[u16], m: usize) -> Vec
     }
 }
 
+/// Internal gaps up to this many move to the scheme's canonical site; a
+/// longer one is a real deletion and stays where the aligner put it.
+const CANONICAL_GAPS: usize = 2;
+
+/// Base labels of `gaps` that no residue of `run` (IMGT labels) fills.
+fn aligner_gaps(base: (u16, u16), gaps: Gaps, run: &[Label]) -> Vec<u16> {
+    let (Gaps::Aligner(columns) | Gaps::Leading(columns) | Gaps::Single(columns)) = gaps else {
+        return Vec::new();
+    };
+    let filled: Vec<u16> = run
+        .iter()
+        .filter(|l| l.insertion().is_none())
+        .filter_map(|l| {
+            let n = l.number;
+            columns
+                .iter()
+                .find(|(lo, hi, _)| (*lo..=*hi).contains(&n))
+                .map(|(_, _, off)| (i32::from(n) + i32::from(*off)) as u16)
+        })
+        .collect();
+    let empty: Vec<u16> = (base.0..=base.1).filter(|p| !filled.contains(p)).collect();
+    match gaps {
+        Gaps::Single(_) if empty.len() != 1 => return Vec::new(),
+        Gaps::Leading(_) => {}
+        _ => return empty,
+    }
+    let first = filled.iter().copied().min().unwrap_or(base.1 + 1);
+    let (leading, internal): (Vec<u16>, Vec<u16>) = empty.into_iter().partition(|p| *p < first);
+    match internal.len() > CANONICAL_GAPS {
+        true => [leading, internal].concat(),
+        false => leading,
+    }
+}
+
 fn span_of(spans: &[Span], number: u16) -> usize {
     spans
         .iter()
@@ -349,14 +438,19 @@ fn span_of(spans: &[Span], number: u16) -> usize {
 }
 
 /// Relabels residues (given by their IMGT labels) in a non-IMGT scheme.
-pub(super) fn relabel(scheme: Scheme, chain: ChainType, imgt: &[Label]) -> Vec<Label> {
+pub(super) fn relabel(
+    scheme: Scheme,
+    chain: ChainType,
+    imgt: &[Label],
+    lambda_j: bool,
+) -> Vec<Label> {
     match scheme {
         Scheme::Aho if chain.is_antibody() => return super::aho::relabel(chain, imgt),
         Scheme::Imgt | Scheme::Aho => return imgt.to_vec(),
         _ if !chain.is_antibody() => return imgt.to_vec(),
         _ => {}
     }
-    let spans = spans(scheme, chain);
+    let spans = spans(scheme, chain, lambda_j);
     let mut out = Vec::with_capacity(imgt.len());
     let mut i = 0;
     while i < imgt.len() {
@@ -377,9 +471,12 @@ pub(super) fn relabel(scheme: Scheme, chain: ChainType, imgt: &[Label]) -> Vec<L
                 base,
                 ins_after,
                 delete,
+                gaps,
                 ..
             } => {
-                out.extend(var_labels(*base, *ins_after, delete, run));
+                let mut order = aligner_gaps(*base, *gaps, &imgt[i..i + run]);
+                order.extend_from_slice(delete);
+                out.extend(var_labels(*base, *ins_after, &order, run));
             }
         }
         i += run;

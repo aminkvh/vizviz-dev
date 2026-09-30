@@ -3,7 +3,11 @@
 
 use std::collections::HashSet;
 
+mod antibody_common;
+use antibody_common::{fingerprint, in_pool};
+
 use proptest::prelude::*;
+use rayon::prelude::*;
 use vv_core::antibody::{
     find_domains, find_variable_domains, Annotation, CdrDefinition, ChainType, Domain, Label,
     Region, Scheme,
@@ -42,6 +46,25 @@ fn trastuzumab_heavy() -> String {
 
 fn trastuzumab_light() -> String {
     light(L_CDR1, L_CDR2, L_CDR3)
+}
+
+#[test]
+fn numbering_is_identical_every_run_and_thread_count() {
+    let mut sequences = vec![trastuzumab_heavy(), trastuzumab_light()];
+    sequences.push([trastuzumab_light(), CK.to_string(), trastuzumab_heavy()].concat());
+    sequences.push(heavy("GFNIKDTYGGGG", "IYPTNGYT", "SRWGGDGFYAMDYAAAA"));
+    sequences.push(light("QDVNTAAAA", "SAS", "QQHYTTPPTGG"));
+    let serial: Vec<_> = sequences.iter().map(|s| fingerprint(s)).collect();
+    assert!(serial == sequences.iter().map(|s| fingerprint(s)).collect::<Vec<_>>());
+    for threads in [1, 4] {
+        let pooled = in_pool(threads, || {
+            sequences
+                .par_iter()
+                .map(|s| fingerprint(s))
+                .collect::<Vec<_>>()
+        });
+        assert!(serial == pooled, "{threads} threads");
+    }
 }
 
 fn only_domain(seq: &str) -> Domain {

@@ -71,28 +71,42 @@ symmetrically around the axis (Lefranc et al. 2003). CDR1 27-38 (axis
 
 | Stretch | IMGT positions | Labels | Insertions after | Deletions, in order |
 |---|---|---|---|---|
-| Heavy FR1 | 1-9, 11-26 | 1-9, 10-25 | (Martin: 8) | |
+| Heavy FR1 | 1-9, 11-26 | 1-9, 10-25 | | Residues missing inside the chain: 10 9 11 8 (all three schemes) |
 | H1 | 27-40 | 26-35 | 35 (Kabat), 31 (Chothia, Martin) | Kabat 35 34 33 32; Chothia, Martin 31 30 29 28 |
-| Heavy FR2 | 41-54 | 36-49 | | Martin 44 43 42 |
+| Heavy FR2 | 41-54 | 36-49 | | One missing residue: where the aligner left a column empty; two or more: 44 43 42 |
 | H2 | 55-74 | 50-65 | 52 | 53 54 55 56 57 |
-| Heavy FR3 | 75-91, 92-94, 95-104 | 66-82, 82A-C, 83-92 (Martin: 66-72, 72A-C, 73-92) | | |
+| Heavy FR3 | 75-104 | 66-92 and insertions, counted | 82 (Martin 72) | Where the aligner left columns empty |
 | H3 | 105-117 | 93-102 | 100 | 100 99 98 97 96 95 |
-| Heavy FR4 | 118-128 | 103-113 | | |
-| Light FR1 | 1-23 | 1-23 (Kabat, Chothia lambda: no 10; Martin lambda: no 7) | | |
+| Heavy FR4 | 118-128 | 103-113 | | From the end (truncated FR4) |
+| Light FR1 | 1-23 | 1-23 | | Residues missing inside the chain: Kabat, Chothia 10 9 8; Martin 7 6 5 (lambda always lacks one: 10, Martin 7) |
 | L1 | 24-40 | 24-34 | 27 (Kabat), 30 (Chothia, Martin) | Kabat 28 29 30 31; Chothia 31 32 33 34; Martin 30 29 28 27 |
 | Light FR2 | 41-55 | 35-49 | (Martin: 40) | Martin 41 |
 | L2 | 56-69 | 50-56 | 54 (Kabat, Chothia), 52 (Martin) | Kabat, Chothia 54 53; Martin 52 51 |
-| Light FR3 | 70-72, 74-80, 83-104 | 57-59, 60-66, 67-88 (Martin: 57-88) | (Martin: 68) | Martin 68 |
+| Light FR3 | 70-104 | 57-88 and insertions, counted | 66 (Martin 68) | Where the aligner left columns empty; Martin, failing that, 68 |
 | L3 | 105-117 | 89-97 | 95 | 95 94 93 92 |
-| Light FR4 | 118-128 | kappa 98-108; lambda 98-106, 106A, 107 (also in Martin) | | |
+| Light FR4 | 118-128 | 98-108; with a lambda-type J segment 98-106, 106A, 107 (also in Martin) | | From the end |
 
 H1, H2 and L1, L2 loops include the framework columns next to them
 (IMGT 39-40 are Kabat H34-H35 and L33-L34).
 
+Frameworks are counted, not indexed by IMGT column, the way the scheme
+authors' program numbers them: a heavy FR3 of 27 residues has no 82A, one
+of 28 has 82A, and so on to 82E; the light FR3 gets 66A-C likewise. Where
+residues are missing, the aligner says which columns are empty (FR2, FR3).
+In FR1 it says only where the chain starts: one or two residues missing
+inside FR1 go to the scheme's own site whatever the sequence says. FR4 is
+cut from its end. A lambda V domain followed by a kappa-type J segment (Lys
+or Arg at IMGT 127, as in `...TKLEIKR`) gets no 106A, as in the reference
+set. In the aligner, a real gap right after a free column pays the full
+opening price, and kappa and lambda (after IMGT 82) and heavy (after 94)
+have three spare insertion columns that cost little; without them a long
+framework spills into the neighbouring CDR.
+
 **Martin** (Abhinandan & Martin 2008) is Chothia plus indel sites in the
 framework. The published label list puts the heavy FR3 insertion at H72
 (H72A-C) instead of Kabat's H82, and adds sites at H8, H42, L40A/L41 and
-L68. Its effect is on almost every chain: on the held-out set 392 of 392
+L68. The reference program's output shows no H8 deletion in FR1 (it
+deletes at 10 like the others). Its effect is on almost every chain: on the held-out set 392 of 392
 heavy, 61 of 61 lambda and 34 of 325 kappa domains are numbered
 differently from Chothia. The order in which further residues are deleted
 is not in the paper; the orders above are the ones the scheme authors'
@@ -247,18 +261,22 @@ beta MNHEY, SVGAGI, ASRPGLAGGRPEQY), asserted in `tests/antibody.rs`.
 
 ## Validation
 
-`fixtures/real/holdout/` holds 260 entries that did not seed the profiles
-(RCSB queries for Fab, nanobody and Fv entries, X-ray, 3.0 Å or better,
-oldest first, minus the seed list; downloaded again in 2026-09, so the
-counts differ slightly from earlier runs). `cargo test --release -p vv-core
---test antibody_pdb -- --ignored --nocapture` reprints these numbers.
+`fixtures/real/holdout/` holds entries that did not seed the profiles (RCSB
+queries for Fab, nanobody and Fv entries, X-ray, 3.0 Å or better, oldest
+first, minus the seed list). The directory was rebuilt on 2026-09-30 with
+the same queries, since the earlier copy and its id list were gone: 257
+entries now, against 260 then. The first table is the earlier download (778
+domains, which the AHo, receptor and detection figures below also use); the
+second is the current one. `cargo test --release -p vv-core --test
+antibody_pdb -- --ignored --nocapture` reprints the second.
 
-Ground truth for the first table is the depositors' own residue numbers in
+Ground truth for both tables is the depositors' own residue numbers in
 entries whose author numbering places the four conserved anchors (Cys, Trp,
-Cys, FR4 Trp/Phe) at their Kabat/Chothia numbers. About half of the domains
-qualify; the others are numbered 1..n or by a private convention.
+Cys, FR4 Trp/Phe) at their Kabat/Chothia numbers. About a third to a half
+of the domains qualify; the others are numbered 1..n or by a private
+convention.
 
-| | Held-out |
+| | Earlier download |
 |---|---|
 | Domains found (chains scanned) | 778 (974) |
 | Author numbering Kabat/Chothia-framed | 391 |
@@ -267,34 +285,132 @@ qualify; the others are numbered 1..n or by a private convention.
 | Residues agreeing, best scheme per domain | 99.53% |
 | Heavy / kappa / lambda whole-domain | 127/148, 189/212, 14/31 |
 
+| | Current download, before the reference work | Now |
+|---|---|---|
+| Domains found (chains scanned) | 580 (849) | 580 (849) |
+| Author numbering Kabat/Chothia-framed | 198 | 198 |
+| Whole domain identical, Kabat | 182 | 179 |
+| Whole domain identical, best of Kabat/Chothia | 182 | 179 |
+| Residues agreeing, best scheme per domain | 99.76% | 99.58% |
+| Heavy / kappa whole-domain | 50/61, 132/137 | 47/61, 132/137 |
+
+No framed lambda domain is in the current download. The three domains that
+no longer agree are explained under the reference comparison below.
+
 No held-out heavy chain was deposited with H72A: all 159 that use an
 insertion there number it H82A-C, so Martin cannot be checked against
-depositors. It is checked against the scheme authors' program instead
-(`tests/antibody_reference.rs`, needs `fixtures/real/reference/`, one PDB
-file per Fv of the 2019 non-redundant set, seed entries excluded). Whole
-domains identical:
+depositors. It is checked against the scheme authors' program instead.
 
-| | Domains | Identical | Residues |
+### Agreement with the scheme authors' program
+
+`tests/antibody_reference.rs` and `tests/antibody_reference_exact.rs` read
+`fixtures/real/reference/{kabat,chothia,martin}/*.pdb`, one PDB file per Fv
+of the non-redundant set. The files come from the antibody structure
+database of the Martin group (Ferdous & Martin 2018, Database 2018:bay040),
+snapshot of 2019-07-26. Re-download:
+
+```
+base=http://www.abybank.org/abdb/Data
+for s in Kabat Chothia Martin; do
+  curl -O $base/NR_LH_Combined_$s.tar.bz2     # about 78 MB each
+  tar xjf NR_LH_Combined_$s.tar.bz2           # NR_LH_Combined_$s/<ID>_<n>.pdb
+done
+```
+
+Put the three directories under `fixtures/real/reference/` as `kabat`,
+`chothia` and `martin`, or point `VIZVIZ_FIXTURES_REAL` at another
+`fixtures/real`. The bundles hold 1,934, 1,930 and 1,924 files; 3,625,
+3,617 and 3,605 domains remain after the seed entries are dropped. The
+`NR_LH_Protein_*` bundles are a subset and were not used. The site now
+also offers newer snapshots as ZIP files; these numbers are for the 2019
+bundles. The scheme authors' program itself is not needed: the files are
+its output.
+
+Whole domains identical (`cargo test --release -p vv-core --test
+antibody_reference -- --ignored --nocapture` prints the same counts):
+
+| | Domains | Identical before | Identical now | Residues now |
+|---|---|---|---|---|
+| Kabat | 3,625 | 3,490 (96.3%) | 3,593 (99.1%) | 99.87% |
+| Chothia | 3,617 | 3,481 (96.2%) | 3,584 (99.1%) | 99.87% |
+| Martin | 3,605 | 3,539 (98.2%) | 3,577 (99.2%) | 99.86% |
+
+Split by sorted PDB id (even and odd positions), identical before and now:
+Kabat 1,734 to 1,782 of 1,791 and 1,756 to 1,811 of 1,834; Chothia 1,745
+to 1,786 of 1,800 and 1,736 to 1,798 of 1,817; Martin 1,756 to 1,774 of
+1,787 and 1,783 to 1,803 of 1,818. The rules were found by reading the
+whole set, not one half; the gain is in both halves.
+
+Mismatching domains before and how many agree now, by the region of the
+first difference (Kabat; Chothia within one domain of it):
+
+| Region | Kabat | Martin | What fixed it |
 |---|---|---|---|
-| Kabat | 3,625 | 3,490 (96.3%) | 99.67% |
-| Chothia | 3,617 | 3,481 (96.2%) | 99.67% |
-| Martin | 3,605 | 3,539 (98.2%) | 99.70% |
+| Heavy FR3 | 43, 41 agree | 3, 0 | Count the residues; insert after 82 (Martin 72) |
+| Light FR3 | 35, 31 | 8, 4 | Count the residues, insert at 66; no cheap gap after a free column |
+| Lambda FR4 | 9, 9 | 9, 9 | 106A only with a lambda-type J |
+| Lambda L2 (FR3 of 35 residues) | 11, 11 | 9, 9 | Spare columns after IMGT 82 |
+| Light FR1 | 19, 9 | 13, 9 | Canonical gap site |
+| Heavy FR1 | 6, 0 | 8, 2 | Canonical gap site |
+| Heavy FR2 | 3, 2 | 5, 3 | One gap by the aligner, several from 44 |
+| Heavy H2 | 6, 1 | 6, 1 | Spare columns after IMGT 94 |
+| Heavy FR4 | 0, 0 | 1, 1 | Cut from the end |
+| L1, H3 | 3, 0 | 4, 0 | |
+| Total | 135, 104 | 66, 39 | |
 
-Martin: heavy 1,777 of 1,801, kappa 1,414 of 1,434, lambda 348 of 370.
+One domain, 4LLV_3:H, agreed before under Kabat and Chothia and does not
+now.
+
+The remaining 32 (Kabat), 33 (Chothia) and 28 (Martin) domains are listed
+in `EXCEPTIONS` of `antibody_reference_exact.rs`, which fails on any other
+difference and on a listed domain that starts to agree. Seven are numbered
+1..n by the reference (no scheme applied; its Cys 92 lands on 95 or 96):
+1CIC_1:B, 1CIC_2:D, 1DVF_1:B, 1IAI_2:I, 1IAI_2:M, 5XAJ_2:D, 5XAJ_2:F. Ten
+more are inconsistent within the reference set, a domain with the same
+sequence, or the same first residues, being numbered differently in it:
+
+| Domain | Numbered differently |
+|---|---|
+| 1T2Q_1:H | 2D03_1:H (identical domain) |
+| 4G6A_1:H | 4G6A_2:H (identical domain; 5, 6, 6A, 7 against 4, 5, 6, 7) |
+| 4R26_1:L, 6MCO_1:L | each other (identical domain; FR1 starts at 7 against 8) |
+| 4XCF_1:H | 4XAW_1:H (identical domain; H3 labels skip 99) |
+| 4K7P_2:X, 4K7P_2:Y | 4K7P_1:L, 4K7P_1:H (identical domains; L1, and H72A against H82A) |
+| 3U6R_1:H, 4N0Y_1:H, 2HH0_1:H | 1R70_1:H (same first 9, 9 and 5 residues; 5, 6, 6A, 7 against 4, 5, 6, 7) |
+
+The other 17 (`Unexplained` in the test) have no twin in the set and no
+length rule reproduces them: a kappa FR3 gap the reference puts a few
+columns from where the alignment does (3UTZ_1:L, 4LLV_3:L, 5EOC_2:L,
+5VTA_2:L, 6BPC_1:L); chain starts it puts at label 5 (6AOD_1:L, 5WB9_1:L,
+4JY6_1:L, 4UOM_1:L, 5FYL_1:L, 1OAY_2:L); heavy FR2 gaps (1MFE_1:H,
+4LLV_3:H); and four odd chains (1QFW_1:H, 1QFW_1:L, 4YDL_1:H, 5WOB_4:Q).
+They are not shown to be irreducible, so the claim here is 99.1% to 99.2%
+of domains, not 100%.
+
+The numbering does not vary. `real_chains_number_identically_every_run_and_thread_count`
+numbers every reference and held-out chain twice on one thread and on
+pools of 1 and 4 threads, and compares domain ranges, score bits and the
+labels of every scheme; `numbering_is_identical_every_run_and_thread_count`
+does the same without fixtures. Profiles are built with ordered maps,
+equal profile scores go to the later profile of a fixed table, and the one
+parallel loop (`chain_domains`) collects in chain order.
+
+On the rebuilt held-out set, whole domains identical under Kabat went from
+182 to 179 of 198. The three are heavy chains of 1MRD, 1MRE and 1MRF, which
+their depositors number with a three-residue framework deletion at 73-75
+and 82A-C, where the reference program counts residues (66-92, no
+insertion). The reference is the ground truth for this check.
+
 What the misses are, from a read of the held-out depositor set:
 
-- Lambda FR4: depositors split, 13 with `106, 106A, 107` (used here,
-  Kabat's published rule) against 17 with plain `106, 107, 108`, of 31
-  lambda domains with Kabat-framed numbering (one more ends at 106). Kabat's
-  rule stays the default. The scheme authors' program also uses 106A.
+- Lambda FR4: depositors split between `106, 106A, 107` (used here,
+  Kabat's published rule) and plain `106, 107, 108`. The scheme authors'
+  program uses 106A with a lambda-type J segment, and so do we.
 - CDR-H3 insertions lettered from the far end (`100J, 100K` for the last
   two inserted residues); the common convention, `100A...`, is used here.
 - Depositors who numbered by Kabat up to some point and sequentially after
   (trastuzumab heavy chain 1N8Z is Kabat through H52, then 1..n).
 - A few framework insertions and deletions numbered at a different site.
-- In the reference set, long L2 loops (lambda), a few deleted framework
-  residues and domains typed differently (a kappa-like FR4 on a chain typed
-  lambda) are what remains.
 
 Trastuzumab reproduces the published Kabat CDRs exactly (H1 DTYIH, H2
 RIYPTNGYTRYADSVKG, H3 WGGDGFYAMDY, L1 RASQDVNTAVA, L2 SASFLYS, L3
@@ -308,9 +424,8 @@ receptor domains are 1NFD). Other immunoglobulin-fold proteins (MHC heavy
 chains, beta-2 microglobulin) produce no domain: 589 of the 590 other
 chains of the receptor entries; the exception is a chimeric receptor.
 
-Timing, release build, one thread: 10,000 chains (1.9 M residues, 7,993
-domains found) in 4.2 s, 420 µs per chain (330 µs before the receptor
-profiles).
+Timing, release build, one thread: 10,000 chains (1.7 M residues, 6,862
+domains found) in 4.4 s, 437 µs per chain.
 
 ### `cdr` selection
 

@@ -82,6 +82,8 @@ pub struct Domain {
     /// Score relative to a perfect framework match, `0..=1`.
     pub confidence: f32,
     imgt: Vec<Label>,
+    /// False for a lambda V domain joined to a kappa-type J segment.
+    lambda_j: bool,
 }
 
 /// Minimum `confidence` for a domain to be reported.
@@ -107,15 +109,20 @@ impl Domain {
     /// `.2`, ... (`112A` is IMGT 112.1). T-cell receptor domains are
     /// numbered in IMGT whatever `scheme` says.
     pub fn numbering(&self, scheme: Scheme) -> Vec<(usize, Label)> {
-        let labels = numbering::relabel(scheme, self.chain, &self.imgt);
+        let labels = numbering::relabel(scheme, self.chain, &self.imgt, self.lambda_j);
         (self.start..self.end).zip(labels).collect()
     }
 
     /// Label in `scheme` and region under `definition` for each residue.
     pub fn annotate(&self, scheme: Scheme, definition: CdrDefinition) -> Vec<Annotation> {
-        let native = numbering::relabel(definition.native_scheme(), self.chain, &self.imgt);
+        let native = numbering::relabel(
+            definition.native_scheme(),
+            self.chain,
+            &self.imgt,
+            self.lambda_j,
+        );
         let regions = definition.regions(self.chain, &native);
-        let shown = numbering::relabel(scheme, self.chain, &self.imgt);
+        let shown = numbering::relabel(scheme, self.chain, &self.imgt, self.lambda_j);
         (self.start..self.end)
             .zip(shown)
             .zip(regions)
@@ -171,7 +178,18 @@ fn anchors_hold(q: &[u8], slots: &[(usize, Slot)], c104: usize) -> bool {
     is(C23, b'C') && is(c104, b'C') && is(W41, b'W')
 }
 
-/// Best-scoring profile among those selected by `wanted`.
+/// Whether the residue at IMGT 127 (Kabat 106A in lambda) is Lys or Arg,
+/// as in kappa J segments; lambda ones have Leu there.
+fn kappa_type_j(q: &[u8], slots: &[(usize, Slot)], labels: &[Label]) -> bool {
+    let basic = (*b"KR").map(|l| aa_index(l) as u8);
+    slots
+        .iter()
+        .find(|(_, s)| matches!(s, Slot::Col(c) if labels[usize::from(*c)] == Label::new(127)))
+        .is_some_and(|(i, _)| basic.contains(&q[*i]))
+}
+
+/// Best-scoring profile among those selected by `wanted`; equal scores go
+/// to the later profile of the fixed family table.
 fn best_of(q: &[u8], wanted: impl Fn(&Profile) -> bool) -> Option<(&'static Profile, Alignment)> {
     profiles()
         .iter()
@@ -227,6 +245,7 @@ fn scan(q: &[u8], lo: usize, hi: usize, min_confidence: f32, out: &mut Vec<Domai
         score: hit.score,
         confidence,
         imgt: numbering::imgt_labels(&slots, &profile.labels),
+        lambda_j: !kappa_type_j(&q[from..to], &hit.slots, &profile.labels),
     });
     scan(q, lo, start, min_confidence, out);
     scan(q, end, hi, min_confidence, out);

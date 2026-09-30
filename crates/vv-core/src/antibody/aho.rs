@@ -184,10 +184,12 @@ fn n_term(n: usize) -> Vec<Label> {
 fn hairpin(n: usize) -> Vec<Label> {
     let gap = 6usize.saturating_sub(n);
     let start = gap_start(86, gap);
-    (83..=88)
+    let mut out: Vec<Label> = (83..=88)
         .filter(|c| gap == 0 || !(start..start + gap as u16).contains(c))
         .map(Label::new)
-        .collect()
+        .collect();
+    out.extend((0..n.saturating_sub(6)).map(|k| Label::nth_insertion(88, k)));
+    out
 }
 
 impl Stretch {

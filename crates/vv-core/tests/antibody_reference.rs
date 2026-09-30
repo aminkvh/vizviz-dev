@@ -6,30 +6,16 @@
 //! prints the agreement report.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use vv_core::antibody::{find_domains, ChainType, Domain, Label, Scheme};
 
 mod antibody_common;
-use antibody_common::{read_chains, Chain};
+use antibody_common::{fixtures, read_chains, Chain};
 
 const SEED_IDS: &str = include_str!("../src/antibody/seed_ids.txt");
 
 fn entries(dir: &str) -> Vec<(String, std::path::PathBuf)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/real/reference")
-        .join(dir);
-    let mut files: Vec<_> = std::fs::read_dir(root)
-        .map(|it| {
-            it.filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|e| e == "pdb"))
-                .map(|p| (p.file_stem().unwrap().to_string_lossy().to_string(), p))
-                .collect()
-        })
-        .unwrap_or_default();
-    files.sort();
-    files
+    fixtures(&format!("reference/{dir}"))
 }
 
 #[derive(Default)]
@@ -174,19 +160,55 @@ fn reference_numbering_diff() {
         .unwrap();
     let seq = chain.sequence();
     for d in find_domains(&seq) {
-        for ((i, ours), theirs) in d.numbering(scheme).iter().zip(chain.author(&d)) {
+        let imgt = d.numbering(Scheme::Imgt);
+        for (((i, ours), theirs), (_, imgt)) in
+            d.numbering(scheme).iter().zip(chain.author(&d)).zip(&imgt)
+        {
             let mark = if *ours == theirs { ' ' } else { '*' };
             println!(
-                "{}{} {} ours {} theirs {}",
+                "{}{} {} ours {} theirs {} imgt {}",
                 mark,
                 i,
                 seq.as_bytes()[*i] as char,
                 ours,
-                theirs
+                theirs,
+                imgt
             );
         }
     }
 }
+#[test]
+#[ignore = "REF_DUMP=path; writes one TSV row per reference domain for offline analysis"]
+fn reference_numbering_dump() {
+    let Ok(path) = std::env::var("REF_DUMP") else {
+        return;
+    };
+    let mut out = String::new();
+    for (dir, scheme) in SCHEMES {
+        for (name, file) in entries(dir) {
+            for chain in read_chains(&file) {
+                let seq = chain.sequence();
+                for d in find_domains(&seq) {
+                    let join = |l: Vec<Label>| {
+                        l.iter().map(Label::to_string).collect::<Vec<_>>().join(",")
+                    };
+                    let ours: Vec<Label> = d.numbering(scheme).iter().map(|(_, l)| *l).collect();
+                    out += &format!(
+                        "{dir}\t{name}\t{}\t{:?}\t{}\t{}\t{}\t{}\n",
+                        chain.id,
+                        d.chain,
+                        &seq[d.start..d.end],
+                        join(ours),
+                        join(chain.author(&d)),
+                        join(d.numbering(Scheme::Imgt).iter().map(|(_, l)| *l).collect())
+                    );
+                }
+            }
+        }
+    }
+    std::fs::write(path, out).unwrap();
+}
+
 /// Base label range of each loop in Kabat/Chothia/Martin numbering.
 fn loop_bases(heavy: bool) -> Vec<(&'static str, u16, u16)> {
     match heavy {

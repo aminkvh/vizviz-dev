@@ -2,7 +2,7 @@
 //! seed sequences in `seeds.rs` (antibodies) and `tcr_seeds.rs` (T-cell
 //! receptors).
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use super::numbering::Label;
@@ -36,22 +36,37 @@ struct Family {
     empty: &'static [u16],
     /// Insertion columns the family fills (`(84, 'A')` is IMGT 84A).
     extras: &'static [(u16, char)],
+    /// Insertion columns no seed fills: a residue there costs little, so a
+    /// long framework does not spill into the neighbouring CDR.
+    spare: &'static [(u16, char)],
     seeds: &'static [Seed],
 }
 
 const ALPHA_EXTRAS: &[(u16, char)] = &[(84, 'A'), (84, 'B'), (84, 'C')];
+const LIGHT_FR3_SPARE: &[(u16, char)] = &[(82, 'A'), (82, 'B'), (82, 'C')];
+const HEAVY_FR3_SPARE: &[(u16, char)] = &[(94, 'A'), (94, 'B'), (94, 'C')];
 
 fn families() -> [Family; 7] {
     let family = |chain, empty, extras, seeds| Family {
+        spare: &[],
         chain,
         empty,
         extras,
         seeds,
     };
     [
-        family(ChainType::Heavy, &[10, 73], &[], seeds::HEAVY),
-        family(ChainType::Kappa, &[73, 81, 82], &[], seeds::KAPPA),
-        family(ChainType::Lambda, &[10, 73, 81, 82], &[], seeds::LAMBDA),
+        Family {
+            spare: HEAVY_FR3_SPARE,
+            ..family(ChainType::Heavy, &[10, 73], &[], seeds::HEAVY)
+        },
+        Family {
+            spare: LIGHT_FR3_SPARE,
+            ..family(ChainType::Kappa, &[73, 81, 82], &[], seeds::KAPPA)
+        },
+        Family {
+            spare: LIGHT_FR3_SPARE,
+            ..family(ChainType::Lambda, &[10, 73, 81, 82], &[], seeds::LAMBDA)
+        },
         family(
             ChainType::TcrAlpha,
             &[69, 70, 71, 72, 73],
@@ -70,12 +85,17 @@ fn families() -> [Family; 7] {
 }
 
 /// IMGT label of every profile column, in column order.
-fn column_labels(extras: &[(u16, char)]) -> Vec<Label> {
+fn column_labels(family: &Family) -> Vec<Label> {
     let mut out = Vec::new();
     for (lo, hi) in FR_RANGES {
         for number in lo..=hi {
             out.push(Label::new(number));
-            for &(after, letter) in extras.iter().filter(|e| e.0 == number) {
+            for &(after, letter) in family
+                .extras
+                .iter()
+                .chain(family.spare)
+                .filter(|e| e.0 == number)
+            {
                 out.push(Label::with_insertion(after, letter));
             }
         }
@@ -201,9 +221,9 @@ fn substitution_targets() -> [[f32; 20]; 20] {
 
 /// Residue counts per column label over one family's seeds; a seed counts
 /// less than its multiplicity.
-fn family_counts(family: &Family) -> HashMap<Label, [f32; 20]> {
-    let labels = column_labels(family.extras);
-    let mut counts: HashMap<Label, [f32; 20]> = HashMap::new();
+fn family_counts(family: &Family) -> BTreeMap<Label, [f32; 20]> {
+    let labels = column_labels(family);
+    let mut counts: BTreeMap<Label, [f32; 20]> = BTreeMap::new();
     for seed in family.seeds {
         let w = 1.0 + (seed.weight as f32).ln();
         let mut letters: Vec<_> = seed.fr.iter().map(|s| s.bytes()).collect();
@@ -222,8 +242,8 @@ fn family_counts(family: &Family) -> HashMap<Label, [f32; 20]> {
 
 /// Counts pooled over every family of one chain type: families of a type
 /// differ in which columns they fill, not in what the shared ones hold.
-fn pooled_counts(chain: ChainType, families: &[Family]) -> HashMap<Label, [f32; 20]> {
-    let mut pool: HashMap<Label, [f32; 20]> = HashMap::new();
+fn pooled_counts(chain: ChainType, families: &[Family]) -> BTreeMap<Label, [f32; 20]> {
+    let mut pool: BTreeMap<Label, [f32; 20]> = BTreeMap::new();
     for family in families.iter().filter(|f| f.chain == chain) {
         for (label, counts) in family_counts(family) {
             let slot = pool.entry(label).or_default();
@@ -234,7 +254,10 @@ fn pooled_counts(chain: ChainType, families: &[Family]) -> HashMap<Label, [f32; 
 }
 
 fn is_empty(family: &Family, label: &Label) -> bool {
-    label.insertion().is_none() && family.empty.contains(&label.number)
+    match label.insertion() {
+        None => family.empty.contains(&label.number),
+        Some(letter) => family.spare.contains(&(label.number, letter)),
+    }
 }
 
 fn scores_from_counts(counts: &[[f32; 20]], free: &[bool], empty_score: f32) -> Vec<[f32; 21]> {
@@ -280,7 +303,7 @@ fn loop_priors(chain: ChainType) -> [LoopPrior; 3] {
 
 fn build(family: &Family, families: &[Family]) -> Profile {
     let chain = family.chain;
-    let labels = column_labels(family.extras);
+    let labels = column_labels(family);
     let free_gap: Vec<bool> = labels.iter().map(|l| is_empty(family, l)).collect();
     let pool = pooled_counts(chain, families);
     let counts: Vec<[f32; 20]> = labels

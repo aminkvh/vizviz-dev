@@ -1,5 +1,7 @@
 //! The `cdr` selection keyword on a hand-made trastuzumab heavy + light pair.
 
+mod antibody_common;
+
 use vv_core::antibody::{find_in_residues, CdrDefinition};
 use vv_core::glam::Vec3;
 use vv_core::{select, AtomRow, Element, Topology, TopologyBuilder};
@@ -137,8 +139,8 @@ fn the_domains_are_found_once_per_topology_and_not_carried_by_a_clone() {
 }
 
 fn bench_chains(id: &str) -> Vec<(String, String)> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/real/bench")
+    let path = antibody_common::fixtures_root()
+        .join("bench")
         .join(format!("{id}.tsv"));
     std::fs::read_to_string(path)
         .unwrap_or_default()
