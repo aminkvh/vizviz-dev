@@ -21,13 +21,6 @@ pub(super) struct Seed {
 /// are never scored.
 const FR_RANGES: [(u16, u16); 4] = [(1, 26), (39, 55), (66, 104), (118, 128)];
 
-/// Columns before the first CDR: the alignment may start anywhere up to the
-/// first conserved Cys (IMGT 23).
-pub(super) const C23: usize = 22;
-
-/// Column of the conserved Trp (IMGT 41), used to sanity-check an alignment.
-pub(super) const W41: usize = 26 + 2;
-
 /// Chains of one type that leave the same framework columns empty share a
 /// profile, the way the germline families of an antibody type do.
 struct Family {
@@ -44,7 +37,7 @@ struct Family {
 
 const ALPHA_EXTRAS: &[(u16, char)] = &[(84, 'A'), (84, 'B'), (84, 'C')];
 const LIGHT_FR3_SPARE: &[(u16, char)] = &[(82, 'A'), (82, 'B'), (82, 'C')];
-const HEAVY_FR3_SPARE: &[(u16, char)] = &[(94, 'A'), (94, 'B'), (94, 'C')];
+const HEAVY_SPARE: &[(u16, char)] = &[(6, 'A'), (94, 'A'), (94, 'B'), (94, 'C')];
 
 fn families() -> [Family; 7] {
     let family = |chain, empty, extras, seeds| Family {
@@ -56,7 +49,7 @@ fn families() -> [Family; 7] {
     };
     [
         Family {
-            spare: HEAVY_FR3_SPARE,
+            spare: HEAVY_SPARE,
             ..family(ChainType::Heavy, &[10, 73], &[], seeds::HEAVY)
         },
         Family {
@@ -145,6 +138,11 @@ pub(super) struct Profile {
     pub labels: Vec<Label>,
     /// Index of the first column after each CDR loop (FR2, FR3, FR4 starts).
     pub loop_exit: [usize; 3],
+    /// Column of the first conserved Cys (IMGT 23): the alignment may start
+    /// anywhere up to it.
+    pub c23: usize,
+    /// Column of the conserved Trp (IMGT 41), used to sanity-check an alignment.
+    pub w41: usize,
     /// Column of the second conserved Cys (IMGT 104).
     pub c104: usize,
     /// Match log-odds in bits per column; index 20 is any non-standard letter.
@@ -203,6 +201,9 @@ const PSEUDOCOUNT: f32 = 4.0;
 /// there costs more.
 const EMPTY_COLUMN_SCORE: f32 = -1.0;
 const RECEPTOR_EMPTY_SCORE: f32 = -4.0;
+/// Score of a residue placed in the heavy FR1 insertion column: only a
+/// chain too long for the framework should use it.
+const FR1_INSERT_SCORE: f32 = -3.0;
 
 /// `target[b][a]`: probability of seeing `a` in a column where `b` is
 /// conserved, from BLOSUM62 half-bit scores and the background.
@@ -314,7 +315,12 @@ fn build(family: &Family, families: &[Family]) -> Profile {
         true => EMPTY_COLUMN_SCORE,
         false => RECEPTOR_EMPTY_SCORE,
     };
-    let score = scores_from_counts(&counts, &free_gap, empty_score);
+    let mut score = scores_from_counts(&counts, &free_gap, empty_score);
+    for (row, label) in score.iter_mut().zip(&labels) {
+        if *label == Label::with_insertion(6, 'A') {
+            *row = [FR1_INSERT_SCORE; 21];
+        }
+    }
     let column_of = |number: u16| {
         labels
             .iter()
@@ -322,7 +328,7 @@ fn build(family: &Family, families: &[Family]) -> Profile {
             .unwrap_or(0)
     };
     let loop_exit = [39, 66, 118].map(column_of);
-    let c104 = column_of(104);
+    let (c23, w41, c104) = (column_of(23), column_of(41), column_of(104));
     let ideal = score
         .iter()
         .zip(&free_gap)
@@ -334,6 +340,8 @@ fn build(family: &Family, families: &[Family]) -> Profile {
         chain,
         labels,
         loop_exit,
+        c23,
+        w41,
         c104,
         score,
         free_gap,

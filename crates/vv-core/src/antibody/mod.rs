@@ -21,7 +21,7 @@ pub use numbering::{Label, Scheme};
 pub use topology::{cdr_residues, chain_domains, find_in_residues, AntibodyCache, CdrResidue};
 
 use align::{align, Alignment, Slot};
-use profile::{aa_index, profiles, Profile, C23, W41};
+use profile::{aa_index, profiles, Profile};
 
 /// Variable-domain family of a chain: an antibody heavy or light chain, or
 /// a T-cell receptor alpha or beta chain.
@@ -167,7 +167,7 @@ fn candidate_window(q: &[u8]) -> Option<(usize, usize)> {
     ))
 }
 
-fn anchors_hold(q: &[u8], slots: &[(usize, Slot)], c104: usize) -> bool {
+fn anchors_hold(q: &[u8], slots: &[(usize, Slot)], profile: &Profile) -> bool {
     let at = |col: usize| {
         slots
             .iter()
@@ -175,7 +175,7 @@ fn anchors_hold(q: &[u8], slots: &[(usize, Slot)], c104: usize) -> bool {
             .map(|(i, _)| q[*i])
     };
     let is = |col, letter: u8| at(col) == Some(aa_index(letter) as u8);
-    is(C23, b'C') && is(c104, b'C') && is(W41, b'W')
+    is(profile.c23, b'C') && is(profile.c104, b'C') && is(profile.w41, b'W')
 }
 
 /// Whether the residue at IMGT 127 (Kabat 106A in lambda) is Lys or Arg,
@@ -224,7 +224,7 @@ fn scan(q: &[u8], lo: usize, hi: usize, min_confidence: f32, out: &mut Vec<Domai
         return;
     };
     let (from, to) = (lo + from, lo + to);
-    let Some((profile, hit)) = best_alignment(&q[from..to]) else {
+    let Some((profile, mut hit)) = best_alignment(&q[from..to]) else {
         return;
     };
     let confidence = hit.score / profile.ideal;
@@ -232,9 +232,10 @@ fn scan(q: &[u8], lo: usize, hi: usize, min_confidence: f32, out: &mut Vec<Domai
         true => min_confidence,
         false => min_confidence * RECEPTOR_FLOOR_RATIO,
     };
-    if confidence < floor || !anchors_hold(&q[from..to], &hit.slots, profile.c104) {
+    if confidence < floor || !anchors_hold(&q[from..to], &hit.slots, profile) {
         return;
     }
+    hit.claim_leading(profile);
     let start = from + hit.slots[0].0;
     let end = from + hit.slots.last().map_or(0, |s| s.0) + 1;
     let slots: Vec<Slot> = hit.slots.iter().map(|s| s.1).collect();

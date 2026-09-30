@@ -174,8 +174,10 @@ enum Gaps {
     Canonical,
     /// Every empty column of the table `(lo, hi, offset)`.
     Aligner(&'static [(u16, u16, i16)]),
-    /// Only the columns before the first residue (an N-terminal truncation).
-    Leading(&'static [(u16, u16, i16)]),
+    /// Only the columns before the first residue (an N-terminal truncation),
+    /// at most `.1` of them; a chain shorter than that loses further
+    /// residues inside the stretch instead.
+    Leading(&'static [(u16, u16, i16)], u16),
     /// The empty column of the table when exactly one is empty; with more,
     /// `delete` orders them.
     Single(&'static [(u16, u16, i16)]),
@@ -222,6 +224,7 @@ const fn framework1(
     hi: u16,
     base_hi: u16,
     columns: &'static [(u16, u16, i16)],
+    max_leading: u16,
     ins_after: u16,
     delete: &'static [u16],
 ) -> Span {
@@ -231,7 +234,7 @@ const fn framework1(
         base: (1, base_hi),
         ins_after,
         delete,
-        gaps: Gaps::Leading(columns),
+        gaps: Gaps::Leading(columns, max_leading),
     }
 }
 
@@ -261,12 +264,15 @@ const H_FR2_DELETE: &[u16] = &[44, 43, 42, 41, 40, 39, 38, 37, 36];
 /// Chothia) or 7 (Martin), heavy chains at 10 in all three; then spreading
 /// away from that site.
 const L_FR1_KABAT: &[u16] = &[10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
-const L_FR1_MARTIN: &[u16] = &[7, 6, 5, 4, 3, 2, 1];
+const L_FR1_MARTIN: &[u16] = &[7, 6, 5, 8, 9, 10, 4, 3, 2, 1];
 const H_FR1_DELETE: &[u16] = &[10, 9, 11, 8, 12, 7, 6, 5, 4, 3, 2, 1];
 
 /// Framework stretches of the IMGT frame that carry base labels, as
 /// `(first IMGT column, last, offset)`. Heavy IMGT 10 has no Kabat label.
 const LIGHT_FR1: &[(u16, u16, i16)] = &[(1, 23, 0)];
+/// Light chains lose at most positions 1 to 4 at the N-terminus; a shorter
+/// chain still starts at 5 and loses the rest inside FR1.
+const LIGHT_MAX_LEADING: u16 = 4;
 const HEAVY_FR1: &[(u16, u16, i16)] = &[(1, 9, 0), (11, 26, -1)];
 const HEAVY_FR2: &[(u16, u16, i16)] = &[(41, 54, -5)];
 const HEAVY_FR3: &[(u16, u16, i16)] = &[(75, 91, -9), (95, 104, -12)];
@@ -281,7 +287,7 @@ fn heavy_spans(scheme: Scheme) -> Vec<Span> {
         _ => (31, H1_CHOTHIA),
     };
     vec![
-        framework1(26, 25, HEAVY_FR1, 9, H_FR1_DELETE),
+        framework1(26, 25, HEAVY_FR1, u16::MAX, 6, H_FR1_DELETE),
         var(27, 40, (26, 35), h1_ins, h1_delete),
         counted(41, 54, (36, 49), 49, Gaps::Single(HEAVY_FR2), H_FR2_DELETE),
         var(55, 74, (50, 65), 52, H2_DELETE),
@@ -295,7 +301,7 @@ fn heavy_spans(scheme: Scheme) -> Vec<Span> {
 /// H8, the FR2 deletion and the H72 insertion Kabat puts at H82.
 fn martin_heavy_spans() -> Vec<Span> {
     vec![
-        framework1(26, 25, HEAVY_FR1, 8, H_FR1_DELETE),
+        framework1(26, 25, HEAVY_FR1, u16::MAX, 7, H_FR1_DELETE),
         var(27, 40, (26, 35), 31, H1_CHOTHIA),
         counted(41, 54, (36, 49), 49, Gaps::Single(HEAVY_FR2), H_FR2_DELETE),
         var(55, 74, (50, 65), 52, H2_DELETE),
@@ -313,7 +319,14 @@ fn light_spans(scheme: Scheme, lambda_j: bool) -> Vec<Span> {
         Scheme::Kabat => (27, L1_KABAT),
         _ => (30, L1_CHOTHIA),
     };
-    let mut spans = vec![framework1(23, 23, LIGHT_FR1, 9, L_FR1_KABAT)];
+    let mut spans = vec![framework1(
+        23,
+        23,
+        LIGHT_FR1,
+        LIGHT_MAX_LEADING,
+        9,
+        L_FR1_KABAT,
+    )];
     spans.extend([
         var(24, 40, (24, 34), l1_ins, l1_delete),
         fixed(41, 55, -6),
@@ -329,7 +342,7 @@ fn light_spans(scheme: Scheme, lambda_j: bool) -> Vec<Span> {
 /// the shifted L1 and L2 deletions.
 fn martin_light_spans(lambda_j: bool) -> Vec<Span> {
     let mut spans = vec![
-        framework1(23, 23, LIGHT_FR1, 10, L_FR1_MARTIN),
+        framework1(23, 23, LIGHT_FR1, LIGHT_MAX_LEADING, 10, L_FR1_MARTIN),
         var(24, 40, (24, 34), 30, L1_MARTIN),
         var(41, 55, (35, 49), 40, &[41]),
         var(56, 69, (50, 56), 52, L2_MARTIN),
@@ -364,7 +377,13 @@ fn spans(scheme: Scheme, chain: ChainType, lambda_j: bool) -> Vec<Span> {
 
 /// Labels for `m` residues filling `base`, with insertion letters after
 /// `ins_after` or deletions in `delete` order.
-fn var_labels(base: (u16, u16), ins_after: u16, delete: &[u16], m: usize) -> Vec<Label> {
+fn var_labels(
+    base: (u16, u16),
+    ins_after: u16,
+    delete: &[u16],
+    m: usize,
+    inserted: usize,
+) -> Vec<Label> {
     let mut positions: Vec<u16> = if base.1 == 0 {
         Vec::new()
     } else {
@@ -379,7 +398,7 @@ fn var_labels(base: (u16, u16), ins_after: u16, delete: &[u16], m: usize) -> Vec
         }
         positions.truncate(m);
     }
-    let extra_count = m.saturating_sub(positions.len());
+    let extra_count = m.saturating_sub(positions.len()) + inserted;
     let letters = |n| (0..n).map(|k| Label::nth_insertion(ins_after, k));
     match positions.iter().position(|&p| p == ins_after) {
         Some(at) => {
@@ -400,7 +419,7 @@ const CANONICAL_GAPS: usize = 2;
 
 /// Base labels of `gaps` that no residue of `run` (IMGT labels) fills.
 fn aligner_gaps(base: (u16, u16), gaps: Gaps, run: &[Label]) -> Vec<u16> {
-    let (Gaps::Aligner(columns) | Gaps::Leading(columns) | Gaps::Single(columns)) = gaps else {
+    let (Gaps::Aligner(columns) | Gaps::Leading(columns, _) | Gaps::Single(columns)) = gaps else {
         return Vec::new();
     };
     let filled: Vec<u16> = run
@@ -417,11 +436,16 @@ fn aligner_gaps(base: (u16, u16), gaps: Gaps, run: &[Label]) -> Vec<u16> {
     let empty: Vec<u16> = (base.0..=base.1).filter(|p| !filled.contains(p)).collect();
     match gaps {
         Gaps::Single(_) if empty.len() != 1 => return Vec::new(),
-        Gaps::Leading(_) => {}
+        Gaps::Leading(..) => {}
         _ => return empty,
     }
     let first = filled.iter().copied().min().unwrap_or(base.1 + 1);
+    let max_leading = match gaps {
+        Gaps::Leading(_, max) => max,
+        _ => u16::MAX,
+    };
     let (leading, internal): (Vec<u16>, Vec<u16>) = empty.into_iter().partition(|p| *p < first);
+    let leading: Vec<u16> = leading.into_iter().filter(|p| *p <= max_leading).collect();
     match internal.len() > CANONICAL_GAPS {
         true => [leading, internal].concat(),
         false => leading,
@@ -476,7 +500,17 @@ pub(super) fn relabel(
             } => {
                 let mut order = aligner_gaps(*base, *gaps, &imgt[i..i + run]);
                 order.extend_from_slice(delete);
-                out.extend(var_labels(*base, *ins_after, &order, run));
+                let inserted = imgt[i..i + run]
+                    .iter()
+                    .filter(|l| l.insertion().is_some())
+                    .count();
+                out.extend(var_labels(
+                    *base,
+                    *ins_after,
+                    &order,
+                    run - inserted,
+                    inserted,
+                ));
             }
         }
         i += run;

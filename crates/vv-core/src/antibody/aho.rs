@@ -212,7 +212,11 @@ pub(super) fn relabel(chain: ChainType, imgt: &[Label]) -> Vec<Label> {
     while i < imgt.len() {
         let number = imgt[i].number;
         let Some(stretch) = stretch_of(number) else {
-            out.push(fixed_label(number).unwrap_or(Label::new(number)));
+            let base = fixed_label(number).unwrap_or(Label::new(number));
+            out.push(match imgt[i].insertion() {
+                Some(letter) => Label::with_insertion(base.number, letter),
+                None => base,
+            });
             i += 1;
             continue;
         };

@@ -71,14 +71,14 @@ symmetrically around the axis (Lefranc et al. 2003). CDR1 27-38 (axis
 
 | Stretch | IMGT positions | Labels | Insertions after | Deletions, in order |
 |---|---|---|---|---|
-| Heavy FR1 | 1-9, 11-26 | 1-9, 10-25 | | Residues missing inside the chain: 10 9 11 8 (all three schemes) |
+| Heavy FR1 | 1-9, 11-26 | 1-9, 10-25 | 6 (Martin 7), only for a chain too long for the stretch | Residues missing inside the chain: 10 9 11 8 (all three schemes) |
 | H1 | 27-40 | 26-35 | 35 (Kabat), 31 (Chothia, Martin) | Kabat 35 34 33 32; Chothia, Martin 31 30 29 28 |
 | Heavy FR2 | 41-54 | 36-49 | | One missing residue: where the aligner left a column empty; two or more: 44 43 42 |
 | H2 | 55-74 | 50-65 | 52 | 53 54 55 56 57 |
 | Heavy FR3 | 75-104 | 66-92 and insertions, counted | 82 (Martin 72) | Where the aligner left columns empty |
 | H3 | 105-117 | 93-102 | 100 | 100 99 98 97 96 95 |
 | Heavy FR4 | 118-128 | 103-113 | | From the end (truncated FR4) |
-| Light FR1 | 1-23 | 1-23 | | Residues missing inside the chain: Kabat, Chothia 10 9 8; Martin 7 6 5 (lambda always lacks one: 10, Martin 7) |
+| Light FR1 | 1-23 | 1-23 | | At most 1-4 missing at the start, then Kabat, Chothia 10 9 8 7 6 5; Martin 7 6 5 8 9 10 (lambda always lacks one: 10, Martin 7) |
 | L1 | 24-40 | 24-34 | 27 (Kabat), 30 (Chothia, Martin) | Kabat 28 29 30 31; Chothia 31 32 33 34; Martin 30 29 28 27 |
 | Light FR2 | 41-55 | 35-49 | (Martin: 40) | Martin 41 |
 | L2 | 56-69 | 50-56 | 54 (Kabat, Chothia), 52 (Martin) | Kabat, Chothia 54 53; Martin 52 51 |
@@ -94,7 +94,15 @@ authors' program numbers them: a heavy FR3 of 27 residues has no 82A, one
 of 28 has 82A, and so on to 82E; the light FR3 gets 66A-C likewise. Where
 residues are missing, the aligner says which columns are empty (FR2, FR3).
 In FR1 it says only where the chain starts: one or two residues missing
-inside FR1 go to the scheme's own site whatever the sequence says. FR4 is
+inside FR1 go to the scheme's own site whatever the sequence says. A light
+chain loses at most positions 1-4 at the start (a shorter stub still starts
+at label 5 in the reference set, `LIGHT_MAX_LEADING`) and the rest inside
+FR1; a heavy chain has no such limit. A residue in front of the aligned
+start belongs to the domain when fewer than 23 residues precede the first
+conserved Cys: the chain then holds nothing but framework there, and the
+reference numbers every one of them (`claim_leading`). A heavy chain with
+more framework residues than the stretch has positions gets its extra one
+at 6A (Martin 7A), through a spare column that costs 3 bits. FR4 is
 cut from its end. A lambda V domain followed by a kappa-type J segment (Lys
 or Arg at IMGT 127, as in `...TKLEIKR`) gets no 106A, as in the reference
 set. In the aligner, a real gap right after a free column pays the full
@@ -106,7 +114,8 @@ framework spills into the neighbouring CDR.
 framework. The published label list puts the heavy FR3 insertion at H72
 (H72A-C) instead of Kabat's H82, and adds sites at H8, H42, L40A/L41 and
 L68. The reference program's output shows no H8 deletion in FR1 (it
-deletes at 10 like the others). Its effect is on almost every chain: on the held-out set 392 of 392
+deletes at 10 like the others), and its heavy FR1 insertions sit at 7A
+(Kabat and Chothia put them at 6A). Its effect is on almost every chain: on the held-out set 392 of 392
 heavy, 61 of 61 lambda and 34 of 325 kappa domains are numbered
 differently from Chothia. The order in which further residues are deleted
 is not in the paper; the orders above are the ones the scheme authors'
@@ -331,14 +340,14 @@ antibody_reference -- --ignored --nocapture` prints the same counts):
 
 | | Domains | Identical before | Identical now | Residues now |
 |---|---|---|---|---|
-| Kabat | 3,625 | 3,490 (96.3%) | 3,593 (99.1%) | 99.87% |
-| Chothia | 3,617 | 3,481 (96.2%) | 3,584 (99.1%) | 99.87% |
-| Martin | 3,605 | 3,539 (98.2%) | 3,577 (99.2%) | 99.86% |
+| Kabat | 3,625 | 3,490 (96.3%) | 3,602 (99.4%) | 99.87% |
+| Chothia | 3,617 | 3,481 (96.2%) | 3,593 (99.3%) | 99.87% |
+| Martin | 3,605 | 3,539 (98.2%) | 3,582 (99.4%) | 99.87% |
 
 Split by sorted PDB id (even and odd positions), identical before and now:
-Kabat 1,734 to 1,782 of 1,791 and 1,756 to 1,811 of 1,834; Chothia 1,745
-to 1,786 of 1,800 and 1,736 to 1,798 of 1,817; Martin 1,756 to 1,774 of
-1,787 and 1,783 to 1,803 of 1,818. The rules were found by reading the
+Kabat 1,734 to 1,782 of 1,791 and 1,756 to 1,820 of 1,834; Chothia 1,745
+to 1,787 of 1,800 and 1,736 to 1,806 of 1,817; Martin 1,756 to 1,775 of
+1,787 and 1,783 to 1,807 of 1,818. The rules were found by reading the
 whole set, not one half; the gain is in both halves.
 
 Mismatching domains before and how many agree now, by the region of the
@@ -358,34 +367,65 @@ first difference (Kabat; Chothia within one domain of it):
 | L1, H3 | 3, 0 | 4, 0 | |
 | Total | 135, 104 | 66, 39 | |
 
-One domain, 4LLV_3:H, agreed before under Kabat and Chothia and does not
-now.
-
-The remaining 32 (Kabat), 33 (Chothia) and 28 (Martin) domains are listed
+The remaining 23 (Kabat), 24 (Chothia) and 23 (Martin) domains are listed
 in `EXCEPTIONS` of `antibody_reference_exact.rs`, which fails on any other
-difference and on a listed domain that starts to agree. Seven are numbered
-1..n by the reference (no scheme applied; its Cys 92 lands on 95 or 96):
-1CIC_1:B, 1CIC_2:D, 1DVF_1:B, 1IAI_2:I, 1IAI_2:M, 5XAJ_2:D, 5XAJ_2:F. Ten
-more are inconsistent within the reference set, a domain with the same
-sequence, or the same first residues, being numbered differently in it:
+difference and on a listed domain that starts to agree. Each is one of:
 
-| Domain | Numbered differently |
-|---|---|
-| 1T2Q_1:H | 2D03_1:H (identical domain) |
-| 4G6A_1:H | 4G6A_2:H (identical domain; 5, 6, 6A, 7 against 4, 5, 6, 7) |
-| 4R26_1:L, 6MCO_1:L | each other (identical domain; FR1 starts at 7 against 8) |
-| 4XCF_1:H | 4XAW_1:H (identical domain; H3 labels skip 99) |
-| 4K7P_2:X, 4K7P_2:Y | 4K7P_1:L, 4K7P_1:H (identical domains; L1, and H72A against H82A) |
-| 3U6R_1:H, 4N0Y_1:H, 2HH0_1:H | 1R70_1:H (same first 9, 9 and 5 residues; 5, 6, 6A, 7 against 4, 5, 6, 7) |
+**Antigen chains (10).** The reference never numbers a chain that its
+`REMARK 950 CHAIN` line types `A`; it keeps the deposited numbers. Eight
+are antibodies in the role of antigen (idiotype and anti-idiotype
+complexes): 1CIC_1:B, 1CIC_2:D, 1DVF_1:B, 1IAI_2:I, 1IAI_2:M, 5XAJ_2:D,
+5XAJ_2:F, 5WOB_4:Q (all schemes), and 4K7P_2:X (Chothia, Martin) and
+4K7P_2:Y (Martin), whose deposited numbers happen to equal Kabat's. The
+test checks the type letter for each. Nothing in a structure file says
+which antibody is the antigen, and numbering it is the useful answer, so
+these stay.
 
-The other 17 (`Unexplained` in the test) have no twin in the set and no
-length rule reproduces them: a kappa FR3 gap the reference puts a few
-columns from where the alignment does (3UTZ_1:L, 4LLV_3:L, 5EOC_2:L,
-5VTA_2:L, 6BPC_1:L); chain starts it puts at label 5 (6AOD_1:L, 5WB9_1:L,
-4JY6_1:L, 4UOM_1:L, 5FYL_1:L, 1OAY_2:L); heavy FR2 gaps (1MFE_1:H,
-4LLV_3:H); and four odd chains (1QFW_1:H, 1QFW_1:L, 4YDL_1:H, 5WOB_4:Q).
-They are not shown to be irreducible, so the claim here is 99.1% to 99.2%
-of domains, not 100%.
+**Inconsistent within the reference (1).** 4XCF_1:H and 4XAW_1:H have the
+same 122-residue domain, and the same deposited numbers (`CDR3` from
+100D), yet the reference labels 4XCF_1:H's H3 from 100 and 4XAW_1:H's
+from 99.
+
+**Explained up to a residue-level choice (2).** 5CEY_1:L (all schemes) and
+6NNJ_1:L (Kabat, Chothia) start `YVRPLSVA`: the reference labels them 4, 5,
+6, 7, where the start-at-5 rule gives 5 to 8. 5CEY_2:L has the same eight
+residues after one more, and starts at 5, as the rule says. The reference
+looks to place the start by which residue fits the germline P at 7, a
+choice our aligner makes differently for the same length (4R26_1:L,
+`YVSPLSVA`, starts at 5 in both).
+
+**Open (12, no twin in the set, no rule found).** Heavy FR2 with two or
+three residues missing (1MFE_1:H, 4LLV_3:H): the reference keeps the Gly at
+44 and deletes 42-43 (and 41), where 1MEX_1:H, with the same `PGLEW` and
+no deposited gap, is numbered P41, G42 and 43-44 deleted; whether the
+missing residues are disordered ones (1MFE_1:H's deposited numbers jump
+from 291 to 294) or a real deletion does not decide it, since 1MEX's own
+numbers put its Gly at 44. Kappa FR3 with missing residues (3UTZ_1:L,
+4LLV_3:L, 5EOC_2:L, 5VTA_2:L, 6BPC_1:L): the gap lies one to three
+positions from where the residues fit best (3UTZ_1:L deletes 66 from
+`S65 G66 S67 G68` with a residue missing, where deleting 67 matches all
+three neighbours). Starts (1OAY_2:L, 3GK8_1:H): 3GK8_1:H begins
+`AVHLQGTELVKP`, the reference numbers the first six 3, 4, 5, 6, 6A, 6B,
+and the deposited numbers and any residue match say 1 to 6. And three
+boundaries (1QFW_1:H FR3 start, 1QFW_1:L L1 letters, 4YDL_1:H, which has
+five insertions at 82 that our aligner spends in CDR-H2).
+
+They are not shown to be irreducible, and the twin test does not apply to
+them, so the claim here is 99.3% to 99.4% of domains, not 100%.
+
+**What the stubs show.** Residues in front of our domain were the largest
+single cause in the previous round, and they show that the reference does
+not number a domain alone: it numbers the chain. Of the 27 domains that
+were listed before, 12 were a chain start. 4G6A_1:H and 4G6A_2:H, for
+instance, differ in one leading `V` (ours started after it); 4N0Y_1:H, 4G6A_1:H
+and 2HH0_1:H begin `VQLLEQSG` and carry 6A where 1R70_1:H, `VKLLEQSG`, does
+not: one residue decides between a leading gap with an insertion and a
+straight run, with the insertion column at 3 bits below a match. Seven
+light chains start with a stub of one to seven residues that the reference
+numbers from 5 (6AOD_1:L, 5WB9_1:L, 4JY6_1:L, 4UOM_1:L, 5FYL_1:L, 4R26_1:L,
+6MCO_1:L). The reference chains hold only the variable domain plus a few
+constant residues (no tags); the library numbers a domain after a tag as
+before.
 
 The numbering does not vary. `real_chains_number_identically_every_run_and_thread_count`
 numbers every reference and held-out chain twice on one thread and on

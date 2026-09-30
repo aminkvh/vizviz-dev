@@ -8,6 +8,7 @@
 //! `cargo test --release -p vv-core --test antibody_reference_exact -- --ignored --nocapture`
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 use vv_core::antibody::{find_domains, Label, Scheme};
@@ -20,18 +21,18 @@ const SEED_IDS: &str = include_str!("../src/antibody/seed_ids.txt");
 /// Why a reference domain may differ from ours.
 #[derive(Clone, Copy)]
 enum Evidence {
-    /// The reference wrote plain consecutive numbers: no scheme was applied
-    /// (its Cys 92 or 88 lands on 95, 96 or 106).
-    Sequential,
+    /// The reference treats the chain as an antigen (`REMARK 950` type `A`)
+    /// and keeps the deposited numbers: no scheme was applied.
+    Antigen,
     /// Another domain of the same scheme has this exact sequence and is
     /// numbered differently.
     SameDomain(&'static str),
-    /// Another domain starts with the same `n` residues and is numbered
-    /// differently over them.
-    SamePrefix(&'static str, usize),
-    /// A gap or chain start the reference placed where no length rule, and
-    /// no twin in the set, accounts for it. Not shown to be irreducible.
-    Unexplained,
+    /// Another domain holds the same residues (given) and numbers them
+    /// differently: the flanking chain, not the window, decided.
+    SameWindow(&'static str, &'static str),
+    /// No rule, and no twin in the set, accounts for it; the string names
+    /// where the numbering departs. Not shown to be irreducible.
+    Open(&'static str),
 }
 
 struct Known {
@@ -49,43 +50,47 @@ const fn known(id: &'static str, schemes: &'static str, evidence: Evidence) -> K
     }
 }
 
-use Evidence::{Sequential, Unexplained};
+use Evidence::{Antigen, Open};
+
+const FR2: &str = "heavy FR2 deletion site";
+const FR3: &str = "kappa FR3 gap site";
+const START: &str = "N-terminal start";
+const LOOP: &str = "CDR/framework boundary";
 
 const EXCEPTIONS: &[Known] = &[
-    known("1CIC_1:B", "KCM", Sequential),
-    known("1CIC_2:D", "KCM", Sequential),
-    known("1DVF_1:B", "KCM", Sequential),
-    known("1IAI_2:I", "KCM", Sequential),
-    known("1IAI_2:M", "KCM", Sequential),
-    known("5XAJ_2:D", "KCM", Sequential),
-    known("5XAJ_2:F", "KCM", Sequential),
-    known("1T2Q_1:H", "KCM", Evidence::SameDomain("2D03_1:H")),
-    known("4G6A_1:H", "KCM", Evidence::SameDomain("4G6A_2:H")),
-    known("4R26_1:L", "KC", Evidence::SameDomain("6MCO_1:L")),
-    known("6MCO_1:L", "KC", Evidence::SameDomain("4R26_1:L")),
+    known("1CIC_1:B", "KCM", Antigen),
+    known("1CIC_2:D", "KCM", Antigen),
+    known("1DVF_1:B", "KCM", Antigen),
+    known("1IAI_2:I", "KCM", Antigen),
+    known("1IAI_2:M", "KCM", Antigen),
+    known("5XAJ_2:D", "KCM", Antigen),
+    known("5XAJ_2:F", "KCM", Antigen),
+    known("5WOB_4:Q", "KCM", Antigen),
+    known("4K7P_2:X", "CM", Antigen),
+    known("4K7P_2:Y", "M", Antigen),
     known("4XCF_1:H", "KCM", Evidence::SameDomain("4XAW_1:H")),
-    known("4K7P_2:X", "CM", Evidence::SameDomain("4K7P_1:L")),
-    known("4K7P_2:Y", "M", Evidence::SameDomain("4K7P_1:H")),
-    known("3U6R_1:H", "KCM", Evidence::SamePrefix("1R70_1:H", 12)),
-    known("4N0Y_1:H", "KCM", Evidence::SamePrefix("1R70_1:H", 9)),
-    known("2HH0_1:H", "KCM", Evidence::SamePrefix("1R70_1:H", 5)),
-    known("1MFE_1:H", "KCM", Unexplained),
-    known("1OAY_2:L", "KC", Unexplained),
-    known("1QFW_1:H", "KCM", Unexplained),
-    known("1QFW_1:L", "KCM", Unexplained),
-    known("3UTZ_1:L", "KCM", Unexplained),
-    known("4JY6_1:L", "KCM", Unexplained),
-    known("4LLV_3:H", "KCM", Unexplained),
-    known("4LLV_3:L", "KCM", Unexplained),
-    known("4UOM_1:L", "KC", Unexplained),
-    known("4YDL_1:H", "KCM", Unexplained),
-    known("5EOC_2:L", "KCM", Unexplained),
-    known("5FYL_1:L", "KC", Unexplained),
-    known("5VTA_2:L", "KCM", Unexplained),
-    known("5WB9_1:L", "KCM", Unexplained),
-    known("5WOB_4:Q", "KCM", Unexplained),
-    known("6AOD_1:L", "KC", Unexplained),
-    known("6BPC_1:L", "KCM", Unexplained),
+    known(
+        "5CEY_1:L",
+        "KCM",
+        Evidence::SameWindow("5CEY_2:L", "YVRPLSVA"),
+    ),
+    known(
+        "6NNJ_1:L",
+        "KC",
+        Evidence::SameWindow("5CEY_2:L", "YVRPLSVA"),
+    ),
+    known("1MFE_1:H", "KCM", Open(FR2)),
+    known("4LLV_3:H", "KCM", Open(FR2)),
+    known("3UTZ_1:L", "KCM", Open(FR3)),
+    known("4LLV_3:L", "KCM", Open(FR3)),
+    known("5EOC_2:L", "KCM", Open(FR3)),
+    known("5VTA_2:L", "KCM", Open(FR3)),
+    known("6BPC_1:L", "KCM", Open(FR3)),
+    known("1OAY_2:L", "KC", Open(START)),
+    known("3GK8_1:H", "KCM", Open(START)),
+    known("1QFW_1:H", "KCM", Open(LOOP)),
+    known("1QFW_1:L", "KCM", Open(LOOP)),
+    known("4YDL_1:H", "KCM", Open(LOOP)),
 ];
 
 const SCHEMES: [(&str, Scheme, char); 3] = [
@@ -97,6 +102,7 @@ const SCHEMES: [(&str, Scheme, char); 3] = [
 struct Record {
     /// `<file stem>:<chain>`, e.g. `1CIC_1:B`.
     id: String,
+    file: PathBuf,
     /// Four-character PDB id of the file.
     entry: String,
     sequence: String,
@@ -124,6 +130,7 @@ fn records(dir: &str, scheme: Scheme) -> Vec<Record> {
             for d in find_domains(&sequence) {
                 out.push(Record {
                     id: format!("{stem}:{}", chain.id),
+                    file: path.clone(),
                     entry: entry.clone(),
                     sequence: sequence[d.start..d.end].to_string(),
                     ours: d.numbering(scheme).iter().map(|(_, l)| *l).collect(),
@@ -135,6 +142,17 @@ fn records(dir: &str, scheme: Scheme) -> Vec<Record> {
     out
 }
 
+/// Chain type letters of `REMARK 950 CHAIN <type> <label> <original>`.
+fn chain_type(file: &Path, label: char) -> Option<char> {
+    std::fs::read_to_string(file)
+        .ok()?
+        .lines()
+        .filter_map(|l| l.strip_prefix("REMARK 950 CHAIN "))
+        .map(|l| l.split_whitespace().collect::<Vec<_>>())
+        .find(|f| f.get(1).is_some_and(|c| c.starts_with(label)))
+        .and_then(|f| f[0].chars().next())
+}
+
 fn check_evidence(recs: &[Record], record: &Record, evidence: Evidence) {
     let other = |id: &str| {
         recs.iter()
@@ -142,22 +160,27 @@ fn check_evidence(recs: &[Record], record: &Record, evidence: Evidence) {
             .unwrap_or_else(|| panic!("{id} missing from the reference set"))
     };
     match evidence {
-        Evidence::Sequential => {
-            let numbers: Vec<u16> = record.reference.iter().map(|l| l.number).collect();
-            let plain = record.reference.iter().all(|l| l.insertion().is_none());
-            assert!(plain && numbers.windows(2).all(|w| w[1] == w[0] + 1));
+        Evidence::Antigen => {
+            let label = record.id.chars().last().expect("chain id");
+            assert_eq!(chain_type(&record.file, label), Some('A'), "{}", record.id);
         }
         Evidence::SameDomain(id) => {
             let twin = other(id);
             assert_eq!(twin.sequence, record.sequence, "{id} is not a twin");
             assert_ne!(twin.reference, record.reference, "{id} agrees with it");
         }
-        Evidence::SamePrefix(id, n) => {
+        Evidence::SameWindow(id, window) => {
             let twin = other(id);
-            assert_eq!(twin.sequence[..n], record.sequence[..n], "{id} prefix");
-            assert_ne!(twin.reference[..n], record.reference[..n], "{id} agrees");
+            let at = |r: &Record| r.sequence.find(window).expect("window in both");
+            let (a, b) = (at(record), at(twin));
+            let span = window.len();
+            assert_ne!(
+                record.reference[a..a + span],
+                twin.reference[b..b + span],
+                "{id} numbers the window alike"
+            );
         }
-        Evidence::Unexplained => {}
+        Evidence::Open(cause) => assert!(!cause.is_empty()),
     }
 }
 

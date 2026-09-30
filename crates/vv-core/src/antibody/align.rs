@@ -2,7 +2,7 @@
 //! states with affine gaps inside the framework, and free-length CDR loops
 //! between framework blocks priced by a length prior.
 
-use super::profile::{Profile, C23};
+use super::profile::Profile;
 
 const NEG: f32 = -1.0e9;
 const GAP_OPEN: f32 = 10.0;
@@ -123,7 +123,7 @@ fn fill_match(q: &[u8], profile: &Profile, idx: usize, prev: Option<&Column>, co
                 (v, From::Cell(state))
             }
         };
-        let free_start = if idx <= C23 { 0.0 } else { NEG };
+        let free_start = if idx <= profile.c23 { 0.0 } else { NEG };
         let (base, from) = match free_start >= arrive {
             true => (free_start, From::Start),
             false => (arrive, from),
@@ -271,6 +271,41 @@ fn trace(
     }
     slots.reverse();
     Alignment { score, slots }
+}
+
+/// Longest stretch before the first conserved Cys that a chain can still
+/// number in full (kappa FR1 has 22 positions before it).
+const MAX_BEFORE_C23: usize = 22;
+
+impl Alignment {
+    /// Gives the residues in front of a late-starting alignment the
+    /// framework columns just before its first, when the chain has no
+    /// room for anything but framework there (an N-terminal stub the local
+    /// score left out) and the columns exist for all of them.
+    pub(super) fn claim_leading(&mut self, profile: &Profile) {
+        let Some(&(first, Slot::Col(col))) = self.slots.first() else {
+            return;
+        };
+        let cys = self
+            .slots
+            .iter()
+            .find(|s| s.1 == Slot::Col(profile.c23 as u8))
+            .map(|s| s.0);
+        if first == 0 || cys.is_none_or(|i| i > MAX_BEFORE_C23) {
+            return;
+        }
+        let free: Vec<usize> = (0..usize::from(col))
+            .filter(|&c| !profile.free_gap[c])
+            .collect();
+        let Some(cols) = free.len().checked_sub(first).map(|at| &free[at..]) else {
+            return;
+        };
+        let claimed = cols
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| (i, Slot::Col(c as u8)));
+        self.slots.splice(0..0, claimed.collect::<Vec<_>>());
+    }
 }
 
 pub(super) fn align(q: &[u8], profile: &Profile) -> Option<Alignment> {
