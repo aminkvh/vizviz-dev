@@ -160,12 +160,12 @@ pub const SPECS: &[Spec] = &[
             "cartoon", "ribbon", "surface", "gaussian", "blob", "blobby", "skin", "skinsurface",
             "ses", "glycan", "snfg", "carbohydrate",
         ],
-        usage: "representation spacefill|ballstick|sticks|lines|sas|tube|cartoon|gaussiansurface|skinsurface|ses|glycan [ID]",
+        usage: "representation spacefill|ballstick|sticks|lines|sas|tube|cartoon|gaussiansurface|skinsurface|ses|snfg [ID]",
         help: "Draw the current rep of a structure (default: current) as spacefill, \
                ball-and-stick, a backbone tube, DSSP-shaped cartoon ribbons (`vv_core::dssp`/`cartoon`), a ray-marched \
                Gaussian surface (`vv_core::gaussian_surface`), a skin surface \
                (`vv_core::skin_surface`, Edelsbrunner's mixed complex), the analytic solvent-excluded \
-               surface (`ses`), or 3D-SNFG glycan symbols (`glycan`, `vv_core::glycan`). `rep` works too.",
+               surface (`ses`), or SNFG glycan symbols (`snfg`, alias `glycan`; `vv_core::glycan`). `rep` works too.",
     },
     Spec {
         id: "addrep",
@@ -204,13 +204,16 @@ pub const SPECS: &[Spec] = &[
         title: "Representation option",
         keywords: &[
             "size", "radius", "probe", "scale", "bond", "blob", "shrink", "tune", "bases",
-            "ligands", "ions", "water", "glycans", "lipids", "additives",
+            "ligands", "ions", "water", "glycans", "lipids", "additives", "helix", "cylinder",
+            "mesh", "dots", "wireframe", "surface", "line",
         ],
         usage: "repopt [NAME VALUE|default]",
         help: "Tune the current rep: atom `scale`, `bond` or tube `radius` in Angstrom, the \
-               SAS/SES `probe` radius, Gaussian `blob`, skin `shrink`. A cartoon or tube \
-               also takes `ligands`, `ions`, `glycans`, `lipids`, `water`, `additives` \
-               (on|off), and a cartoon `bases` (plate|ladder|stick). Alone, lists the \
+               SAS/SES `probe` radius, Gaussian `blob`, skin `shrink`. A Gaussian, skin or \
+               SES surface also takes `surface` (solid|mesh|dots) and `line` (mesh width, \
+               pixels). A cartoon or tube also takes `ligands`, `ions`, `glycans`, \
+               `lipids`, `water`, `additives` (on|off), and a cartoon `helix` \
+               (ribbon|cylinder) and `bases` (plate|ladder|stick). Alone, lists the \
                options of the current rep's style.",
     },
     Spec {
@@ -753,9 +756,9 @@ pub fn parse_representation(word: &str) -> Result<Representation, ScriptError> {
         // rep. `licorice` and `sticks_only` are older names that still parse.
         "sticks" | "licorice" | "sticks_only" => Ok(Representation::Sticks),
         "lines" | "wire" | "wireframe" => Ok(Representation::Lines),
-        "glycan" | "snfg" | "3d-snfg" | "carbohydrate" => Ok(Representation::Glycan),
+        "snfg" | "glycan" | "3d-snfg" | "carbohydrate" => Ok(Representation::Glycan),
         other => Err(ScriptError(format!(
-            "unknown representation `{other}`; expected spacefill, ballstick, sticks, lines, sas, tube, cartoon, gaussiansurface, skinsurface, ses, or glycan"
+            "unknown representation `{other}`; expected spacefill, ballstick, sticks, lines, sas, tube, cartoon, gaussiansurface, skinsurface, ses, or snfg"
         ))),
     }
 }
@@ -1826,6 +1829,9 @@ mod tests {
             );
         }
 
+        let help = spec("representation").unwrap();
+        assert!(help.usage.contains("snfg") && help.help.contains("SNFG"));
+
         let mut run = |line: &str| run_line(&mut scene, &mut history, line).map_err(|e| e.0);
         assert!(run("repopt").unwrap().contains("size = 4"));
         assert!(run("repopt").unwrap().contains("radius = 0.5"));
@@ -2142,7 +2148,7 @@ mod tests {
         );
         assert_eq!(
             scene.structure(id).unwrap().rep().representation,
-            Representation::Lines
+            Representation::Cartoon
         );
         assert_eq!(
             run_line(&mut scene, &mut history, "redo").unwrap(),

@@ -22,6 +22,7 @@
 pub(crate) mod bases;
 pub(crate) mod companions;
 pub(crate) mod interactions;
+mod surface_mesh;
 
 use std::collections::HashMap;
 use std::sync::mpsc;
@@ -651,8 +652,13 @@ fn build_tube(
     let (caps, cap_radii) = build_tube_caps(ctx, renderer, structure, frame, &ends, all_colors);
     let style = bases::BaseStyle::of(rep);
     let bases = Bases::build(ctx, renderer, loaded, &keep, frame, all_colors, style)?;
+    let traced = companions::traced_atoms(&plan);
+    let drawn = companions::Drawn {
+        keep: &keep,
+        traced: &traced,
+    };
     let companions = Companions::build(
-        ctx, renderer, loaded, rep, &keep, frame, all_colors, adjacency,
+        ctx, renderer, loaded, rep, drawn, frame, all_colors, adjacency,
     );
     Ok(TubeGeometry {
         plan,
@@ -695,7 +701,7 @@ impl TubeGeometry {
 }
 
 fn oom_notice(what: &str, label: &str) -> String {
-    format!("{label}: not enough GPU memory for the {what}; drawing atoms instead")
+    format!("{label}: not enough GPU memory for the {what}; try `rep lines` or a smaller selection")
 }
 
 /// A CPU build running on a worker thread for coordinate set `frame`.
@@ -855,6 +861,9 @@ struct CartoonEntry {
     /// (frame) it shows.
     from: Arc<CartoonPlan>,
     spline: Arc<CartoonFrame>,
+    /// With cylinder helices, `from` restyled: the plan whose frame moves
+    /// the axes with the atoms.
+    cylinders: Option<CartoonPlan>,
     bases: Bases,
     companions: Companions,
 }
@@ -977,6 +986,25 @@ fn plan_cartoon(structure: &Structure, positions: &[Vec3]) -> (CartoonPlan, Cart
     (plan, spline)
 }
 
+/// The cartoon `rep` draws when it asks for cylinder helices (`repopt
+/// helix cylinder`): the structure's `plan` and `spline` with each helix
+/// straightened, sections `samples` to a residue step. `None` for ribbon
+/// helices, which draw the structure's own.
+pub(crate) fn cylinder_cartoon(
+    rep: &Rep,
+    plan: &CartoonPlan,
+    spline: &CartoonFrame,
+    positions: &[Vec3],
+    samples: usize,
+) -> Option<(CartoonPlan, CartoonFrame)> {
+    if rep.option("helix").unwrap_or(0.0) < 0.5 {
+        return None;
+    }
+    let styled = plan.with_cylinder_helices(spline, samples);
+    let frame = styled.frame(positions);
+    Some((styled, frame))
+}
+
 /// What a rep draws, by style.
 enum RepGeometry {
     /// Not built yet (or waiting on a worker).
@@ -996,11 +1024,13 @@ enum RepGeometry {
     /// Some atoms, as their own spheres and cylinders.
     SomeAtoms(Derived),
     Tube(Box<TubeGeometry>),
-    Cartoon(CartoonEntry),
+    Cartoon(Box<CartoonEntry>),
     Gaussian(GaussianSurfaceEntry),
     Skin(SkinSurfaceEntry),
     Ses(SesEntry),
     Glycan(GlycanEntry),
+    /// A surface as its mesh edges or vertices (`repopt surface mesh|dots`).
+    Mesh(surface_mesh::SurfaceMesh),
 }
 
 struct RepEntry {
@@ -1016,6 +1046,7 @@ struct RepEntry {
     frame: usize,
     geometry: RepGeometry,
     skin_job: Option<Job<SkinComplex>>,
+    mesh_job: Option<Job<vv_core::cartoon::ExpandedMesh>>,
     ses_job: Option<Job<SesBuilt>>,
     /// Out of GPU memory, or refused (skin surface too large): draws
     /// nothing, and nothing retries until the rep changes.
@@ -1182,7 +1213,8 @@ fn occlusion_proxies(
         })),
     };
     match &rep.geometry {
-        RepGeometry::Pending | RepGeometry::Empty => {}
+        // A wire mesh hides nothing behind it.
+        RepGeometry::Pending | RepGeometry::Empty | RepGeometry::Mesh(_) => {}
         RepGeometry::AllAtoms { .. } | RepGeometry::SomeAtoms(_) => {
             atoms(sizes_of(rep.representation, &rep.options), &rep.atoms)
         }
@@ -1348,9 +1380,9 @@ impl GpuCache {
         self.occlusion_job.is_some()
             || self.entries.values().any(|e| {
                 e.cartoon_job.is_some()
-                    || e.reps
-                        .values()
-                        .any(|r| r.skin_job.is_some() || r.ses_job.is_some())
+                    || e.reps.values().any(|r| {
+                        r.skin_job.is_some() || r.ses_job.is_some() || r.mesh_job.is_some()
+                    })
             })
     }
 
@@ -1364,10 +1396,9 @@ impl GpuCache {
             return false;
         };
         (is_cartoon && entry.cartoon_job.is_some())
-            || entry
-                .reps
-                .get(&rep)
-                .is_some_and(|r| r.skin_job.is_some() || r.ses_job.is_some())
+            || entry.reps.get(&rep).is_some_and(|r| {
+                r.skin_job.is_some() || r.ses_job.is_some() || r.mesh_job.is_some()
+            })
     }
 
     /// Brings the GPU copies in step with `scene`: drops what closed,
@@ -1565,7 +1596,7 @@ impl GpuCache {
             let carries_over = matches!(
                 rep.representation,
                 SceneRepresentation::SkinSurface | SceneRepresentation::Ses
-            );
+            ) || surface_mesh::style(rep).is_some();
             let geometry = match previous {
                 Some(p) if carries_over && p.representation == rep.representation => p.geometry,
                 _ => RepGeometry::Pending,
@@ -1582,6 +1613,7 @@ impl GpuCache {
                     geometry,
                     skin_job: None,
                     ses_job: None,
+                    mesh_job: None,
                     failed: false,
                 },
             );
@@ -1600,6 +1632,24 @@ impl GpuCache {
         };
         let structure = &loaded.structure;
         match rep.representation {
+            SceneRepresentation::GaussianSurface
+            | SceneRepresentation::SkinSurface
+            | SceneRepresentation::Ses
+                if surface_mesh::style(rep).is_some() =>
+            {
+                let style = surface_mesh::style(rep).expect("guarded");
+                self.sync_surface_mesh(
+                    r,
+                    loaded,
+                    rep,
+                    style,
+                    (frame, recolor),
+                    ctx,
+                    renderer,
+                    waker,
+                    &mut colors,
+                );
+            }
             SceneRepresentation::Spacefill
             | SceneRepresentation::BallAndStick
             | SceneRepresentation::Sas
@@ -1754,7 +1804,13 @@ impl GpuCache {
                     if Arc::ptr_eq(&c.from, &model.plan) && !recolor {
                         // Same plan: move the spline, bases and companions.
                         if !Arc::ptr_eq(&c.spline, &model.spline) {
-                            c.gpu.set_frame(ctx, &model.spline);
+                            match &c.cylinders {
+                                None => c.gpu.set_frame(ctx, &model.spline),
+                                Some(styled) => {
+                                    let positions = loaded.drawn_positions(frame);
+                                    c.gpu.set_frame(ctx, &styled.frame(positions.positions()));
+                                }
+                            }
                             c.spline = model.spline.clone();
                             c.companions.set_frame(ctx, structure, frame);
                             let keep = keep_mask(&r.atoms, structure.atom_count());
@@ -1778,39 +1834,55 @@ impl GpuCache {
                     }
                 }
                 let keep = keep_mask(&r.atoms, structure.atom_count());
+                let cylinders = cylinder_cartoon(
+                    rep,
+                    &model.plan,
+                    &model.spline,
+                    loaded.drawn_positions(frame).positions(),
+                    vv_core::cartoon::SAMPLES_PER_RESIDUE,
+                );
+                let (plan, spline) = match &cylinders {
+                    Some((plan, spline)) => (plan, spline),
+                    None => (&*model.plan, &*model.spline),
+                };
                 let filtered = match &loaded.trace_keep(&keep) {
-                    None => (*model.plan).clone(),
-                    Some(keep) => model.plan.filter(|a| keep[a as usize]),
+                    None => plan.clone(),
+                    Some(keep) => plan.filter(|a| keep[a as usize]),
                 };
                 let all = colors();
                 let adjacency = adjacency_of(&mut entry.adjacency, loaded);
-                let built =
-                    CartoonGpu::upload(ctx, &filtered, &model.spline, &all).and_then(|gpu| {
-                        let style = bases::BaseStyle::of(rep);
-                        let bases = Bases::build(ctx, renderer, loaded, &keep, frame, &all, style)?;
-                        Ok((gpu, bases))
-                    });
+                let built = CartoonGpu::upload(ctx, &filtered, spline, &all).and_then(|gpu| {
+                    let style = bases::BaseStyle::of(rep);
+                    let bases = Bases::build(ctx, renderer, loaded, &keep, frame, &all, style)?;
+                    Ok((gpu, bases))
+                });
                 match built {
                     Ok((gpu, bases)) => {
                         let bindings = renderer.bind_cartoon(&gpu);
+                        let traced = companions::traced_atoms(&filtered);
+                        let drawn = companions::Drawn {
+                            keep: &keep,
+                            traced: &traced,
+                        };
                         let companions = Companions::build(
                             ctx,
                             renderer,
                             loaded,
                             rep,
-                            &keep,
+                            drawn,
                             frame,
                             &all,
                             adjacency.as_deref(),
                         );
-                        r.geometry = RepGeometry::Cartoon(CartoonEntry {
+                        r.geometry = RepGeometry::Cartoon(Box::new(CartoonEntry {
                             gpu,
                             bindings,
                             from: model.plan.clone(),
                             spline: model.spline.clone(),
+                            cylinders: cylinders.map(|(plan, _)| plan),
                             bases,
                             companions,
-                        });
+                        }));
                     }
                     Err(OutOfGpuMemory) => {
                         r.geometry = RepGeometry::Pending;
@@ -2298,6 +2370,26 @@ impl GpuCache {
                             material,
                         });
                     }
+                    RepGeometry::Mesh(m) => match &m.drawn {
+                        surface_mesh::Drawn::Edges { gpu, bindings } => {
+                            cartoon_sources.push(DrawSource {
+                                id,
+                                rep: rep.id,
+                                atom_map: Some(gpu.source.clone()),
+                                bond_atoms: None,
+                            });
+                            cartoons.push(CartoonItem {
+                                mesh: vv_render::CartoonMesh::Glycan(gpu),
+                                bindings,
+                                material,
+                            });
+                        }
+                        surface_mesh::Drawn::Dots { points, radius } => derived(
+                            points,
+                            GpuRepresentation::Spacefill,
+                            surface_mesh::SurfaceMesh::dot_sizes(*radius),
+                        ),
+                    },
                     RepGeometry::Glycan(_) | RepGeometry::Empty => {}
                     RepGeometry::Gaussian(g) => gaussian_surfaces.push(GaussianSurfaceItem {
                         gpu: &g.gpu,
@@ -2667,8 +2759,15 @@ mod tests {
         let bonds = vv_core::bonds::perceive(&structure.topology, structure.frame(0).positions());
         let t = &structure.topology;
         let mut rep = Rep::new(RepId(0), SceneRepresentation::Cartoon);
+        let trace: Vec<u32> = vv_core::backbone_trace(t, structure.frame(0).positions())
+            .segments
+            .concat();
+        let drawn = companions::Drawn {
+            keep: &None,
+            traced: &trace,
+        };
         let names_of = |rep: &Rep| -> Vec<(vv_core::Companion, Vec<String>)> {
-            companions::subsets(&structure, &bonds.pairs, rep, &None)
+            companions::subsets(&structure, &bonds.pairs, rep, drawn)
                 .into_iter()
                 .map(|(kind, s)| {
                     let mut names: Vec<String> = s
@@ -2697,7 +2796,7 @@ mod tests {
             .iter()
             .any(|(k, _)| *k == vv_core::Companion::Ligand));
         rep.options.insert("ligands".into(), 1.0);
-        let subset = companions::subsets(&structure, &bonds.pairs, &rep, &None)
+        let subset = companions::subsets(&structure, &bonds.pairs, &rep, drawn)
             .into_iter()
             .find(|(k, _)| *k == vv_core::Companion::Ligand)
             .unwrap()
@@ -2714,6 +2813,59 @@ mod tests {
             assert_eq!(subset.atoms[*la as usize], *ra);
             assert_eq!(subset.atoms[*lb as usize], *rb);
         }
+    }
+
+    /// A selection of a run of residues, one lone residue, a heme and the
+    /// waters, drawn as a cartoon: the run is ribbon, the lone residue (no
+    /// neighbour to span to) and the heme are licorice, and the selected
+    /// waters are licorice too because the selection names them.
+    #[test]
+    fn a_mixed_selection_draws_what_the_ribbon_cannot_as_licorice() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/small/4HHB.cif");
+        let structure = vv_io::load(path).unwrap();
+        let bonds = vv_core::bonds::perceive(&structure.topology, structure.frame(0).positions());
+        let loaded = LoadedStructure::new(structure, None, "4HHB".into(), bonds);
+        let t = &loaded.structure.topology;
+        let mut rep = Rep::new(RepId(0), SceneRepresentation::Cartoon);
+        rep.selection = "chain A and (resid 10-14 50 or resname HEM or water)".into();
+        let selected = loaded.select(&rep.selection, 0).unwrap();
+        let keep: Option<Vec<bool>> =
+            Some((0..t.atom_count()).map(|a| selected.contains(a)).collect());
+
+        let coords = loaded.structure.frame(0);
+        let codes = vv_core::cartoon::secondary_structure(t, coords.positions(), true);
+        let plan = vv_core::cartoon::plan(t, coords.positions(), &codes);
+        let mask = keep.clone().unwrap();
+        let plan = plan.filter(|a| mask[a as usize]);
+        assert!(!plan.recipes.is_empty(), "the run of residues is a ribbon");
+
+        let traced = companions::traced_atoms(&plan);
+        let drawn = companions::Drawn {
+            keep: &keep,
+            traced: &traced,
+        };
+        let pieces = companions::subsets(&loaded.structure, &loaded.bonds.pairs, &rep, drawn);
+        let names_of = |kind| -> Vec<String> {
+            let found = pieces.iter().find(|(k, _)| *k == kind);
+            let mut names: Vec<String> = found
+                .map(|(_, s)| &s.atoms)
+                .into_iter()
+                .flatten()
+                .map(|&a| t.residue_name(t.residue_index[a as usize] as usize).into())
+                .collect();
+            names.dedup();
+            names
+        };
+        assert_eq!(names_of(vv_core::Companion::Ligand), ["HEM"]);
+        assert_eq!(names_of(vv_core::Companion::Untraced).len(), 1);
+        assert_eq!(names_of(vv_core::Companion::Water), ["HOH"]);
+        let ribbon_residues = (10..=14).count();
+        let traced_residues: std::collections::HashSet<u32> = traced
+            .iter()
+            .map(|&a| t.residue_index[a as usize])
+            .collect();
+        assert_eq!(traced_residues.len(), ribbon_residues);
     }
 
     /// Regression for the tube's `radius_by` (putty) option: the plan's
@@ -2973,5 +3125,122 @@ mod tests {
                 "{pair:?} drawn both as an ordinary cylinder and as strands"
             );
         }
+    }
+
+    /// Loads 1CRN, makes its rep `representation` with `surface` set to
+    /// `display` (1 mesh, 2 dots), and syncs until its background builds
+    /// are done.
+    fn synced_surface(
+        ctx: &Arc<GpuContext>,
+        representation: SceneRepresentation,
+        display: f32,
+    ) -> (Scene, StructureId, GpuCache) {
+        use vv_scene::{Command, CommandHistory};
+        let renderer = vv_render::Renderer::new(ctx.clone(), 64, 64);
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::new(10);
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/small/1CRN.cif");
+        history
+            .dispatch(&mut scene, Command::LoadStructure { path })
+            .unwrap();
+        let id = scene.structures().next().unwrap().0;
+        let rep = scene.structure(id).unwrap().reps[0].id;
+        let set = |name: &str, value: f32| Command::SetRepOption {
+            id,
+            rep,
+            name: name.into(),
+            value: Some(value),
+        };
+        history
+            .dispatch(
+                &mut scene,
+                Command::SetRepresentation {
+                    id,
+                    rep,
+                    representation,
+                },
+            )
+            .unwrap();
+        history
+            .dispatch(&mut scene, set("surface", display))
+            .unwrap();
+        let mut cache = GpuCache::default();
+        for _ in 0..600 {
+            cache.sync(&scene, ctx, &renderer, false);
+            if !cache.building() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        (scene, id, cache)
+    }
+
+    /// Each surface drawn as `mesh` is a triangle soup of edges whose every
+    /// vertex names a real atom of the structure, and as `dots` a point
+    /// per mesh vertex doing the same; the solid surface lists none.
+    #[test]
+    fn every_surface_draws_as_a_mesh_or_dots_that_picks_real_atoms() {
+        let Some(ctx) = gpu_context() else { return };
+        for representation in [
+            SceneRepresentation::GaussianSurface,
+            SceneRepresentation::SkinSurface,
+            SceneRepresentation::Ses,
+        ] {
+            let (scene, id, cache) = synced_surface(&ctx, representation, 1.0);
+            let atoms = scene.structure(id).unwrap().structure.atom_count() as u32;
+            let (sources, items, cartoons, ..) = cache.draw_items(&scene);
+            assert!(
+                items.is_empty(),
+                "{representation:?}: mesh edges are not atoms"
+            );
+            assert_eq!(cartoons.len(), 1, "{representation:?}");
+            let vv_render::CartoonMesh::Glycan(soup) = cartoons[0].mesh else {
+                panic!("{representation:?}: edges draw as a triangle soup");
+            };
+            assert!(soup.vertex_count > 3_000, "{representation:?}");
+            assert_eq!(soup.vertex_count % 3, 0);
+            assert_eq!(soup.display, vv_render::MeshDisplay::Lines(1.5));
+            let source = sources.last().unwrap().atom_map.as_ref().unwrap();
+            assert_eq!(source.len(), soup.vertex_count as usize);
+            assert!(source.iter().all(|&a| a < atoms), "{representation:?}");
+
+            let (scene, _, cache) = synced_surface(&ctx, representation, 2.0);
+            let (sources, items, cartoons, ..) = cache.draw_items(&scene);
+            assert!(cartoons.is_empty(), "{representation:?}: dots are atoms");
+            assert_eq!(items.len(), 1);
+            let map = sources[0].atom_map.as_ref().unwrap();
+            assert!(map.len() > 1_000 && map.iter().all(|&a| a < atoms));
+
+            let (scene, _, cache) = synced_surface(&ctx, representation, 0.0);
+            let (_, items, cartoons, ..) = cache.draw_items(&scene);
+            assert!(items.is_empty() && cartoons.is_empty());
+        }
+    }
+
+    #[test]
+    fn cylinder_helices_are_a_cartoon_option_that_straightens_helices() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/small/1CRN.cif");
+        let structure = vv_io::load(path).unwrap();
+        let positions = structure.frame(0).positions().to_vec();
+        let (plan, spline) = plan_cartoon(&structure, &positions);
+        let mut rep = Rep::new(RepId(0), SceneRepresentation::Cartoon);
+        let samples = vv_core::cartoon::SAMPLES_PER_RESIDUE;
+        assert!(cylinder_cartoon(&rep, &plan, &spline, &positions, samples).is_none());
+        rep.options.insert("helix".into(), 1.0);
+        let (styled, frame) = cylinder_cartoon(&rep, &plan, &spline, &positions, samples).unwrap();
+        let widest = |plan: &CartoonPlan| {
+            plan.recipes
+                .iter()
+                .map(|r| r.half_width)
+                .fold(0.0, f32::max)
+        };
+        assert!(widest(&styled) > widest(&plan), "helices became cylinders");
+        assert_eq!(frame.controls.len(), spline.controls.len());
+        assert_ne!(
+            frame.controls, spline.controls,
+            "controls moved to the axes"
+        );
     }
 }

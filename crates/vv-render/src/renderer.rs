@@ -14,7 +14,7 @@ use crate::camera::{Camera, CameraUniform, KEEP_ALL};
 use crate::context::GpuContext;
 use crate::scene::{
     CartoonGpu, CartoonParams, DrawState, GaussianSurfaceGpu, GaussianSurfaceParams, GlycanGpu,
-    GpuStructure, Page, PageParams, PageState, SkinSurfaceGpu, SkinSurfaceParams,
+    GpuStructure, MeshDisplay, Page, PageParams, PageState, SkinSurfaceGpu, SkinSurfaceParams,
     BONDS_INDIRECT_OFFSET, CARTOON_INDIRECT_RESET, CLUSTER_ATOMS, INDIRECT_RESET,
     LATE_INDIRECT_OFFSET, LINES_INDIRECT_OFFSET, PAGE_ATOMS, POINTS_INDIRECT_OFFSET,
 };
@@ -119,6 +119,13 @@ impl<'a> CartoonMesh<'a> {
         match self {
             CartoonMesh::Ribbon(g) => g.section_count,
             CartoonMesh::Glycan(g) => g.vertex_count,
+        }
+    }
+
+    fn display(self) -> MeshDisplay {
+        match self {
+            CartoonMesh::Ribbon(_) => MeshDisplay::Solid,
+            CartoonMesh::Glycan(g) => g.display,
         }
     }
 
@@ -2719,10 +2726,11 @@ impl Renderer {
         // exactly the order `vv-app`'s `draw_items` appends their
         // `DrawSource`s in. No bond ids: a cartoon never draws bonds.
         for item in cartoons {
+            let (display, display_width) = item.mesh.display().params();
             let params = CartoonParams {
-                id_base: atom_base,
-                _pad: [0; 3],
-                material: item.material,
+                display,
+                display_width,
+                ..CartoonParams::new(atom_base, item.material)
             };
             self.ctx
                 .queue

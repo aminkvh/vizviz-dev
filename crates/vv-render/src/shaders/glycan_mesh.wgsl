@@ -24,15 +24,15 @@ struct Camera {
 };
 @group(0) @binding(0) var<uniform> cam: Camera;
 
-// Per-mesh: this glycan's slice of the frame-wide pick id space and its
-// material. Layout must match `vv_render::scene::CartoonParams`, reused
-// as-is (a glycan has no properties of its own beyond size, already
-// baked into the mesh's vertex positions on the CPU).
+// Per-mesh: this glycan's slice of the frame-wide pick id space, its
+// material, and how it is drawn (0 filled; 1 only the triangles' edges,
+// `display_width` pixels wide -- the surfaces' mesh display). Layout must
+// match `vv_render::scene::CartoonParams`.
 struct GlycanUniform {
     id_base: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    display: u32,
+    display_width: f32,
+    _pad: u32,
     material0: vec4<f32>,
     material1: vec4<f32>,
     material2: vec4<f32>,
@@ -67,6 +67,10 @@ struct VsOut {
     // to the same source atom (`GlycanGpu::source`) — the same "index +
     // base + 1" convention `atoms.wgsl`'s draw shaders use.
     @location(3) @interpolate(flat) id: u32,
+    // 1 at this vertex of its triangle, 0 at the other two: the distance
+    // to an edge, in pixels, is a barycentric coordinate over its screen
+    // gradient (`off_edges`).
+    @location(4) bary: vec3<f32>,
 };
 
 @vertex
@@ -79,7 +83,29 @@ fn vs_glycan(@builtin(vertex_index) v: u32) -> VsOut {
     out.view_normal = (cam.view * vec4<f32>(vert.normal, 0.0)).xyz;
     out.color = linear_rgba(unpack_color(vert.color));
     out.id = glycan.id_base + v + 1u;
+    let corner = v % 3u;
+    out.bary = vec3<f32>(f32(corner == 0u), f32(corner == 1u), f32(corner == 2u));
     return out;
+}
+
+// Screen-space length of each barycentric coordinate's gradient: pixels
+// per unit. Taken before any `discard`, where derivatives are defined.
+fn bary_gradient(bary: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        length(vec2<f32>(dpdx(bary.x), dpdy(bary.x))),
+        length(vec2<f32>(dpdx(bary.y), dpdy(bary.y))),
+        length(vec2<f32>(dpdx(bary.z), dpdy(bary.z))),
+    );
+}
+
+// In the mesh display, whether this pixel is further than half a line width
+// from every edge of its triangle.
+fn off_edges(bary: vec3<f32>, gradient: vec3<f32>) -> bool {
+    if (glycan.display == 0u) {
+        return false;
+    }
+    let edge_px = bary / max(gradient, vec3<f32>(1e-6));
+    return min(edge_px.x, min(edge_px.y, edge_px.z)) > 0.5 * glycan.display_width;
 }
 
 struct FsOut {
@@ -90,7 +116,8 @@ struct FsOut {
 
 @fragment
 fn fs_glycan(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
-    if (clip_distance(in.view_pos) < 0.0) {
+    let gradient = bary_gradient(in.bary);
+    if (clip_distance(in.view_pos) < 0.0 || off_edges(in.bary, gradient)) {
         discard;
     }
     let rd = normalize(in.view_pos);
@@ -113,7 +140,8 @@ fn fs_glycan(in: VsOut, @builtin(front_facing) front: bool) -> FsOut {
 // rasterized depth (no ray-cast gap, unlike a sphere/cylinder impostor).
 @fragment
 fn fs_glycan_glass(in: VsOut, @builtin(front_facing) front: bool) -> GlassColor {
-    if (clip_distance(in.view_pos) < 0.0) {
+    let gradient = bary_gradient(in.bary);
+    if (clip_distance(in.view_pos) < 0.0 || off_edges(in.bary, gradient)) {
         discard;
     }
     let rd = normalize(in.view_pos);
@@ -127,7 +155,8 @@ fn fs_glycan_glass(in: VsOut, @builtin(front_facing) front: bool) -> GlassColor 
 
 @fragment
 fn fs_glycan_pick(in: VsOut) -> @location(0) u32 {
-    if (clip_distance(in.view_pos) < 0.0) {
+    let gradient = bary_gradient(in.bary);
+    if (clip_distance(in.view_pos) < 0.0 || off_edges(in.bary, gradient)) {
         discard;
     }
     return in.id;

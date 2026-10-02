@@ -1550,7 +1550,7 @@ mod tests {
         let id = load(&mut scene, &mut history);
         assert_eq!(
             scene.structure(id).unwrap().rep().representation,
-            Representation::Lines
+            Representation::Cartoon
         );
         history
             .dispatch(
@@ -1569,7 +1569,7 @@ mod tests {
         history.undo(&mut scene).unwrap();
         assert_eq!(
             scene.structure(id).unwrap().rep().representation,
-            Representation::Lines
+            Representation::Cartoon
         );
     }
 

@@ -395,7 +395,7 @@ pub(crate) const REPS: &[(&str, &str)] = &[
     ("Gaussian surface", "rep gaussian_surface"),
     ("Skin surface", "rep skin_surface"),
     ("Molecular surface (SES)", "rep ses"),
-    ("Glycan (3D-SNFG)", "rep glycan"),
+    ("SNFG", "rep glycan"),
 ];
 
 /// Represent ▸ Add rep's form (UX_PATTERNS "Create"): style and

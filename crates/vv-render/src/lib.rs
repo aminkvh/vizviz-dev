@@ -38,7 +38,7 @@ pub use scene::{
     colors_for, colors_for_fragments, colors_for_ss, colors_from_scalar, colors_from_scalar_in,
     pack_rgba, scalar_range, CartoonGpu, CartoonParams, CartoonSectionGpu, DrawState,
     GaussianSurfaceGpu, GaussianSurfaceParams, GlycanGpu, GlycanVertexGpu, GpuStructure,
-    OutOfGpuMemory, PageParams, SkinPatchGpu, SkinSurfaceGpu, SkinSurfaceParams,
+    MeshDisplay, OutOfGpuMemory, PageParams, SkinPatchGpu, SkinSurfaceGpu, SkinSurfaceParams, Soup,
 };
 pub use selection::ItemSelection;
 pub use ses_surface::{SesGpu, SesLayout};

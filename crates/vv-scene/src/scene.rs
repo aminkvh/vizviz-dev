@@ -7,7 +7,7 @@ use std::sync::Arc;
 use vv_core::altloc::AltlocPolicy;
 use vv_core::fixedbitset::FixedBitSet;
 use vv_core::glam::Vec3;
-use vv_core::{BondTable, CoordSet, Structure};
+use vv_core::{BondTable, CoordSet, ResidueClass, Structure};
 
 use crate::coloring::{ColorOverride, Property, PropertyKind};
 use crate::selection::{Mask, SelectionSet};
@@ -366,6 +366,11 @@ const PUTTY: RepOption = option("putty", "Putty strength", 1.0, 0.0, 4.0, "×");
 const PROBE: RepOption = option("probe", "Probe radius", 1.4, 0.5, 3.0, " Å");
 const BLOB: RepOption = option("blob", "Blobbiness", 2.0, 0.5, 4.0, "");
 const SHRINK: RepOption = option("shrink", "Shrink", 0.5, 0.2, 0.8, "");
+/// A surface drawn solid, as the edges of its triangle mesh, or as the
+/// mesh's vertices (`vv_core::{gaussian_mesh, ses_mesh, skin_mesh}`).
+const SURFACE: RepOption = choice("surface", "Display", 0, &["solid", "mesh", "dots"]);
+/// Mesh line width in pixels; a dot is `line / 10` Å in radius.
+const MESH_LINE: RepOption = option("line", "Mesh line width", 1.5, 0.5, 6.0, " px");
 /// 1.5 is the source script's "icon" preset, 4.0 its "full" preset; a
 /// continuous option covers both and anything between or beyond.
 const GLYCAN_SIZE: RepOption = option("size", "Shape size", 4.0, 1.5, 8.0, " Å");
@@ -377,6 +382,9 @@ const GLYCAN_RADIUS: RepOption = option("radius", "Linkage radius", 0.5, 0.0, 1.
 /// How a cartoon or tube draws each nucleotide's base: a stick to the pairing
 /// atom, a plate on its ring atoms (default), or one rung per base pair.
 const BASES: RepOption = choice("bases", "Bases", 1, &["stick", "plate", "ladder"]);
+/// A cartoon's helices as flat ribbons, or as straight cylinders along the
+/// helix axis (`vv_core::cartoon::CartoonPlan::with_cylinder_helices`).
+const HELIX: RepOption = choice("helix", "Helices", 0, &["ribbon", "cylinder"]);
 const LIGANDS: RepOption = choice("ligands", "Ligands, cofactors", 1, ON_OFF);
 const IONS: RepOption = choice("ions", "Ions", 1, ON_OFF);
 const GLYCANS: RepOption = choice("glycans", "Glycans", 1, ON_OFF);
@@ -397,7 +405,8 @@ impl Representation {
     pub fn options(self) -> &'static [RepOption] {
         match self {
             Representation::Spacefill => &[SCALE],
-            Representation::Sas | Representation::Ses => &[PROBE],
+            Representation::Sas => &[PROBE],
+            Representation::Ses => &[PROBE, SURFACE, MESH_LINE],
             Representation::BallAndStick => &[BALL, BOND],
             Representation::Sticks => &[STICK],
             // The first two show outright (`rep_options_ui`): putty's
@@ -415,9 +424,11 @@ impl Representation {
                 WATER,
                 ADDITIVES,
             ],
-            Representation::Cartoon => &[BASES, LIGANDS, IONS, GLYCANS, LIPIDS, WATER, ADDITIVES],
-            Representation::GaussianSurface => &[BLOB],
-            Representation::SkinSurface => &[SHRINK],
+            Representation::Cartoon => &[
+                HELIX, BASES, LIGANDS, IONS, GLYCANS, LIPIDS, WATER, ADDITIVES,
+            ],
+            Representation::GaussianSurface => &[BLOB, SURFACE, MESH_LINE],
+            Representation::SkinSurface => &[SHRINK, SURFACE, MESH_LINE],
             Representation::Glycan => &[GLYCAN_SIZE, GLYCAN_RADIUS],
             Representation::Lines => &[],
         }
@@ -448,6 +459,19 @@ impl Rep {
     /// Whether the selection is every atom (no mask needed).
     pub fn selects_all(&self) -> bool {
         self.selection.trim() == "all"
+    }
+}
+
+/// A cartoon where there is a polymer to trace, else lines (the cheapest
+/// style that shows every bond at any size). The cartoon draws what it
+/// cannot trace as licorice, so nothing a protein structure holds is lost.
+fn default_representation(structure: &Structure) -> Representation {
+    let counts = &structure.topology.class_counts;
+    let polymer = counts[ResidueClass::Protein.index()] + counts[ResidueClass::Nucleic.index()];
+    if polymer > 0 {
+        Representation::Cartoon
+    } else {
+        Representation::Lines
     }
 }
 
@@ -507,13 +531,15 @@ pub struct LoadedStructure {
 }
 
 impl LoadedStructure {
-    /// A freshly loaded structure: one rep, every atom as spacefill.
+    /// A freshly loaded structure: one rep over every atom, drawn as
+    /// `default_representation`.
     pub fn new(
         structure: Structure,
         path: Option<PathBuf>,
         label: String,
         bonds: BondTable,
     ) -> Self {
+        let representation = default_representation(&structure);
         LoadedStructure {
             structure,
             path,
@@ -521,8 +547,7 @@ impl LoadedStructure {
             label,
             visible: true,
             altloc: AltlocPolicy::default(),
-            // Lines: cheapest to draw and shows every bond at any size.
-            reps: vec![Rep::new(RepId(0), Representation::Lines)],
+            reps: vec![Rep::new(RepId(0), representation)],
             current_rep: 0,
             next_rep_id: 1,
             bonds,

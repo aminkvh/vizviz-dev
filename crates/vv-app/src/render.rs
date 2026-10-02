@@ -215,12 +215,23 @@ pub fn trace_scene(scene: &Scene, cache: &GpuCache, quality: Quality) -> TraceIn
                     ));
                     continue;
                 };
-                let dense = plan.redensify(quality.samples_per_residue());
-                let keep = keep_mask(&atoms, n);
-                let mesh = match loaded.trace_keep(&keep) {
-                    None => dense.mesh(&spline),
-                    Some(keep) => dense.filter(|a| keep[a as usize]).mesh(&spline),
+                let samples = quality.samples_per_residue();
+                let (dense, spline) = match crate::gpu_cache::cylinder_cartoon(
+                    rep,
+                    &plan,
+                    &spline,
+                    loaded.drawn_positions(frame).positions(),
+                    samples,
+                ) {
+                    Some(cylinders) => cylinders,
+                    None => (plan.redensify(samples), (*spline).clone()),
                 };
+                let keep = keep_mask(&atoms, n);
+                let dense = match loaded.trace_keep(&keep) {
+                    None => dense,
+                    Some(keep) => dense.filter(|a| keep[a as usize]),
+                };
+                let mesh = dense.mesh(&spline);
                 traced.push_mesh(&mesh.expand_with_ring(quality.ring()), &colors, material);
                 bases::push_traced(
                     &mut traced,
@@ -231,11 +242,16 @@ pub fn trace_scene(scene: &Scene, cache: &GpuCache, quality: Quality) -> TraceIn
                     bases::BaseStyle::of(rep),
                     material,
                 );
+                let covered = companions::traced_atoms(&dense);
+                let drawn = companions::Drawn {
+                    keep: &keep,
+                    traced: &covered,
+                };
                 companions::push_traced(
                     &mut traced,
                     loaded,
                     rep,
-                    &keep,
+                    drawn,
                     positions,
                     &colors,
                     material,
@@ -464,11 +480,16 @@ fn push_tube(
         material,
     );
     let coords = loaded.structure.frame(frame);
+    let covered = companions::traced_atoms(&plan);
+    let drawn = companions::Drawn {
+        keep: &keep,
+        traced: &covered,
+    };
     companions::push_traced(
         traced,
         loaded,
         rep,
-        &keep,
+        drawn,
         coords.positions(),
         colors,
         material,

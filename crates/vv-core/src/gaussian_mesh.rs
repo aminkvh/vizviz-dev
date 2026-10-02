@@ -12,6 +12,7 @@ use rayon::prelude::*;
 use crate::cartoon::ExpandedMesh;
 use crate::gaussian_surface::cutoff_radius;
 use crate::spatial::Grid;
+use crate::surface_net::{self, Isosurface, NetGrid};
 
 /// An atom's field is 1 at its van der Waals surface
 /// ([`crate::gaussian_surface`]); the surface is where the sum is 1.
@@ -40,11 +41,19 @@ pub fn mesh(
     }
     let grid = SampleGrid::around(&field, voxel);
     let values = grid.sample(&field);
-    let cells = grid.surface_cells(&values);
-    let indices = grid.faces(&values, &cells);
-    let refined: Vec<(Vec3, Vec3, u32)> = cells
+    let net = surface_net::build(
+        &grid.net,
+        &Isosurface {
+            grid: &grid.net,
+            values: &values,
+            level: ISOVALUE,
+        },
+    );
+    let indices = net.indices;
+    let refined: Vec<(Vec3, Vec3, u32)> = net
+        .cells
         .par_iter()
-        .map(|&(_, p)| field.onto_surface(p, grid.voxel))
+        .map(|&(_, p)| field.onto_surface(p, grid.net.voxel))
         .collect();
     let mut out = ExpandedMesh {
         positions: refined.iter().map(|v| v.0).collect(),
@@ -131,12 +140,10 @@ impl<'a> Field<'a> {
     }
 }
 
-/// Grid points `origin + voxel * (i, j, k)`, a voxel beyond every
-/// atom's cutoff on each side, so the surface closes inside it.
+/// A grid a voxel beyond every atom's cutoff on each side, so the surface
+/// closes inside it.
 struct SampleGrid {
-    origin: Vec3,
-    voxel: f32,
-    dims: [usize; 3],
+    net: NetGrid,
 }
 
 impl SampleGrid {
@@ -145,32 +152,19 @@ impl SampleGrid {
             (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
             |(lo, hi), (&p, &c)| (lo.min(p - c), hi.max(p + c)),
         );
-        let extent = hi - lo;
-        let fits = (extent.x * extent.y * extent.z / MAX_VOXELS as f32).cbrt();
-        let voxel = voxel.max(fits * 1.01);
-        let origin = lo - Vec3::splat(voxel);
-        let dims = ((extent / voxel).ceil() + 3.0)
-            .to_array()
-            .map(|d| d as usize);
         Self {
-            origin,
-            voxel,
-            dims,
+            net: NetGrid::around(lo, hi, voxel, MAX_VOXELS),
         }
-    }
-
-    fn index(&self, i: usize, j: usize, k: usize) -> usize {
-        i + self.dims[0] * (j + self.dims[1] * k)
-    }
-
-    fn point(&self, i: usize, j: usize, k: usize) -> Vec3 {
-        self.origin + Vec3::new(i as f32, j as f32, k as f32) * self.voxel
     }
 
     /// The density at every grid point: each plane adds up the atoms
     /// whose cutoff reaches it, over the disc they cover there.
     fn sample(&self, field: &Field) -> Vec<f32> {
-        let [nx, ny, nz] = self.dims;
+        let NetGrid {
+            origin,
+            voxel,
+            dims: [nx, ny, nz],
+        } = self.net;
         let mut by_z: Vec<u32> = (0..field.positions.len() as u32).collect();
         by_z.sort_by(|&a, &b| {
             field.positions[a as usize]
@@ -186,7 +180,7 @@ impl SampleGrid {
             .par_chunks_mut(nx * ny)
             .enumerate()
             .for_each(|(k, plane)| {
-                let z = self.origin.z + k as f32 * self.voxel;
+                let z = origin.z + k as f32 * voxel;
                 let from = zs.partition_point(|&az| az < z - field.reach);
                 let to = zs.partition_point(|&az| az <= z + field.reach);
                 for &a in &by_z[from..to] {
@@ -200,15 +194,14 @@ impl SampleGrid {
                     }
                     let r = disc.sqrt();
                     let range = |center: f32, o: f32, n: usize| {
-                        let first = ((center - r - o) / self.voxel).ceil().max(0.0) as usize;
-                        let last =
-                            (((center + r - o) / self.voxel).floor().max(-1.0) + 1.0) as usize;
+                        let first = ((center - r - o) / voxel).ceil().max(0.0) as usize;
+                        let last = (((center + r - o) / voxel).floor().max(-1.0) + 1.0) as usize;
                         first..last.min(n)
                     };
-                    for j in range(c.y, self.origin.y, ny) {
-                        let y = self.origin.y + j as f32 * self.voxel;
-                        for i in range(c.x, self.origin.x, nx) {
-                            let x = self.origin.x + i as f32 * self.voxel;
+                    for j in range(c.y, origin.y, ny) {
+                        let y = origin.y + j as f32 * voxel;
+                        for i in range(c.x, origin.x, nx) {
+                            let x = origin.x + i as f32 * voxel;
                             let d2 = (x - c.x).powi(2) + (y - c.y).powi(2) + dz * dz;
                             if d2 <= cut * cut {
                                 plane[i + nx * j] += field.contribution(a, d2);
@@ -218,117 +211,6 @@ impl SampleGrid {
                 }
             });
         values
-    }
-
-    /// Every cell (by the index of its lowest corner) the isosurface
-    /// crosses, in index order, with the mean of its edges' crossings.
-    fn surface_cells(&self, values: &[f32]) -> Vec<(usize, Vec3)> {
-        let [nx, ny, nz] = self.dims;
-        const CORNERS: [[usize; 3]; 8] = [
-            [0, 0, 0],
-            [1, 0, 0],
-            [0, 1, 0],
-            [1, 1, 0],
-            [0, 0, 1],
-            [1, 0, 1],
-            [0, 1, 1],
-            [1, 1, 1],
-        ];
-        // Corner pairs differing in one axis.
-        const EDGES: [[usize; 2]; 12] = [
-            [0, 1],
-            [2, 3],
-            [4, 5],
-            [6, 7],
-            [0, 2],
-            [1, 3],
-            [4, 6],
-            [5, 7],
-            [0, 4],
-            [1, 5],
-            [2, 6],
-            [3, 7],
-        ];
-        (0..nz - 1)
-            .into_par_iter()
-            .flat_map_iter(|k| {
-                let mut found = Vec::new();
-                for j in 0..ny - 1 {
-                    for i in 0..nx - 1 {
-                        let v = CORNERS.map(|[a, b, c]| values[self.index(i + a, j + b, k + c)]);
-                        let inside = v.map(|x| x >= ISOVALUE);
-                        if inside.iter().all(|&x| x) || inside.iter().all(|&x| !x) {
-                            continue;
-                        }
-                        let (mut sum, mut n) = (Vec3::ZERO, 0.0);
-                        for [a, b] in EDGES {
-                            if inside[a] != inside[b] {
-                                let t = (ISOVALUE - v[a]) / (v[b] - v[a]);
-                                let pa = Vec3::from(CORNERS[a].map(|c| c as f32));
-                                let pb = Vec3::from(CORNERS[b].map(|c| c as f32));
-                                sum += pa.lerp(pb, t);
-                                n += 1.0;
-                            }
-                        }
-                        found.push((
-                            self.index(i, j, k),
-                            self.point(i, j, k) + sum / n * self.voxel,
-                        ));
-                    }
-                }
-                found
-            })
-            .collect()
-    }
-
-    /// Two triangles per grid edge the isosurface crosses, joining the
-    /// four cells around it (their vertices are `cells`' order).
-    fn faces(&self, values: &[f32], cells: &[(usize, Vec3)]) -> Vec<u32> {
-        let [nx, ny, nz] = self.dims;
-        let vertex = |i: usize, j: usize, k: usize| {
-            let key = self.index(i, j, k);
-            cells
-                .binary_search_by_key(&key, |c| c.0)
-                .ok()
-                .map(|v| v as u32)
-        };
-        (1..nz - 1)
-            .into_par_iter()
-            .flat_map_iter(|k| {
-                let mut tris = Vec::new();
-                for j in 1..ny - 1 {
-                    for i in 1..nx - 1 {
-                        let here = values[self.index(i, j, k)] >= ISOVALUE;
-                        // The edge to the next point along each axis, and the
-                        // other two axes' cells around it.
-                        let around: [([usize; 3], [[usize; 3]; 4]); 3] = [
-                            (
-                                [i + 1, j, k],
-                                [[i, j - 1, k - 1], [i, j, k - 1], [i, j, k], [i, j - 1, k]],
-                            ),
-                            (
-                                [i, j + 1, k],
-                                [[i - 1, j, k - 1], [i - 1, j, k], [i, j, k], [i, j, k - 1]],
-                            ),
-                            (
-                                [i, j, k + 1],
-                                [[i - 1, j - 1, k], [i, j - 1, k], [i, j, k], [i - 1, j, k]],
-                            ),
-                        ];
-                        for ([a, b, c], quad) in around {
-                            if (values[self.index(a, b, c)] >= ISOVALUE) == here {
-                                continue;
-                            }
-                            let v = quad.map(|[x, y, z]| vertex(x, y, z));
-                            if let [Some(v0), Some(v1), Some(v2), Some(v3)] = v {
-                                tris.extend([v0, v1, v2, v0, v2, v3]);
-                            }
-                        }
-                    }
-                }
-                tris
-            })
-            .collect()
     }
 }
 

@@ -29,9 +29,12 @@ pub mod sasa;
 pub mod select;
 pub mod seqfeat;
 pub mod ses;
+pub mod ses_mesh;
+pub mod skin_mesh;
 pub mod skin_surface;
 pub mod spatial;
 pub mod structure;
+pub mod surface_net;
 pub mod topology;
 pub mod weighted_delaunay;
 

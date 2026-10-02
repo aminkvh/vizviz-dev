@@ -28,6 +28,8 @@
 use glam::Vec3;
 use rayon::prelude::*;
 
+mod helix;
+
 use crate::backbone::{catmull_rom, trace, Trace};
 use crate::dssp::DsspCode;
 use crate::topology::{SecondaryStructure, Topology};
@@ -52,9 +54,15 @@ pub const ARROW_FLARE: f32 = 1.6;
 const RIBBON_ROUNDNESS: f32 = 0.35;
 const COIL_ROUNDNESS: f32 = 1.0;
 
+/// Radius of a helix drawn as a cylinder: the distance from a CA to the
+/// helix axis, so the cylinder encloses the backbone it stands for.
+pub const HELIX_CYLINDER_RADIUS: f32 = 2.3;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shape {
     Helix,
+    /// A helix drawn as a straight cylinder ([`CartoonPlan::with_cylinder_helices`]).
+    Cylinder,
     Strand,
     Coil,
 }
@@ -81,7 +89,7 @@ fn shapes(codes: &[DsspCode]) -> Vec<Shape> {
         let too_short = match raw[i] {
             Shape::Strand => len < 2,
             Shape::Helix => len < 3,
-            Shape::Coil => false,
+            Shape::Cylinder | Shape::Coil => false,
         };
         if too_short {
             out[i..=j].fill(Shape::Coil);
@@ -96,6 +104,11 @@ fn profile(shape: Shape) -> (f32, f32, f32) {
     match shape {
         Shape::Helix | Shape::Strand => (RIBBON_WIDTH, RIBBON_THICKNESS, RIBBON_ROUNDNESS),
         Shape::Coil => (COIL_WIDTH, COIL_THICKNESS, COIL_ROUNDNESS),
+        Shape::Cylinder => (
+            2.0 * HELIX_CYLINDER_RADIUS,
+            2.0 * HELIX_CYLINDER_RADIUS,
+            COIL_ROUNDNESS,
+        ),
     }
 }
 
@@ -279,6 +292,9 @@ pub struct CartoonPlan {
     shapes: Vec<Shape>,
     /// `[first, end)` slots of each segment.
     segments: Vec<[u32; 2]>,
+    /// `[first, end)` slots of each straight helix cylinder; empty unless
+    /// [`CartoonPlan::with_cylinder_helices`] made them.
+    cylinders: Vec<[u32; 2]>,
     pub recipes: Vec<SectionRecipe>,
     /// As [`CartoonMesh::joins`] and [`CartoonMesh::spans`].
     pub joins: Vec<u32>,
@@ -411,13 +427,7 @@ impl CartoonPlan {
     /// is unchanged, so frames made for the whole plan fit.
     pub fn filter(&self, keep: impl Fn(u32) -> bool) -> CartoonPlan {
         let mut new_index = vec![u32::MAX; self.recipes.len()];
-        let mut out = CartoonPlan {
-            atoms: self.atoms.clone(),
-            carbonyls: self.carbonyls.clone(),
-            shapes: self.shapes.clone(),
-            segments: self.segments.clone(),
-            ..CartoonPlan::default()
-        };
+        let mut out = self.without_sections();
         for &[a, b] in &self.spans {
             let (first, last) = (&self.recipes[a as usize], &self.recipes[b as usize]);
             if !(keep(first.source) && keep(last.source)) {
@@ -444,17 +454,23 @@ impl CartoonPlan {
     /// frame`]) does not depend on section density, so it is still valid
     /// for the result.
     pub fn redensify(&self, samples_per_residue: usize) -> CartoonPlan {
-        let mut out = CartoonPlan {
-            atoms: self.atoms.clone(),
-            carbonyls: self.carbonyls.clone(),
-            shapes: self.shapes.clone(),
-            segments: self.segments.clone(),
-            ..CartoonPlan::default()
-        };
+        let mut out = self.without_sections();
         for &[first, end] in &self.segments {
             out.plan_segment(first as usize, end as usize, samples_per_residue);
         }
         out
+    }
+
+    /// This plan's slots, shapes and cylinders with no sections yet.
+    fn without_sections(&self) -> CartoonPlan {
+        CartoonPlan {
+            atoms: self.atoms.clone(),
+            carbonyls: self.carbonyls.clone(),
+            shapes: self.shapes.clone(),
+            segments: self.segments.clone(),
+            cylinders: self.cylinders.clone(),
+            ..CartoonPlan::default()
+        }
     }
 
     /// Sections along slots `first..end`, one segment, `samples_per_residue`
@@ -488,12 +504,25 @@ impl CartoonPlan {
             roundness: r,
             source: if t < 0.5 { atoms[i] } else { atoms[i + 1] },
         };
+        // A cylinder runs between two cylinder residues; where it meets
+        // anything else its profile steps to the neighbour's rather than
+        // tapering, and a cylinder at a segment end is closed by a disc.
+        let cylinder_step =
+            |i: usize| i + 1 < n && shape[i] == Shape::Cylinder && shape[i + 1] == Shape::Cylinder;
+        let profile_in_step = |i: usize, cylinder: bool| match shape[i] {
+            Shape::Cylinder if !cylinder => profile(Shape::Coil),
+            _ => profiles[i],
+        };
         let base = self.recipes.len() as u32;
         let mut span_starts = Vec::with_capacity(n);
         for i in 0..n - 1 {
             span_starts.push(self.recipes.len() as u32);
-            let (w0, t0, r0) = profiles[i];
-            let (w1, t1, r1) = profiles[i + 1];
+            let cylinder = cylinder_step(i);
+            let (w0, t0, r0) = profile_in_step(i, cylinder);
+            let (w1, t1, r1) = profile_in_step(i + 1, cylinder);
+            if i == 0 && cylinder {
+                self.recipes.push(recipe(0, 0.0, 0.0, t0, r0));
+            }
             for s in 0..samples_per_residue {
                 let t = s as f32 / samples_per_residue as f32;
                 let (th, r) = (t0 + (t1 - t0) * t, r0 + (r1 - r0) * t);
@@ -508,9 +537,16 @@ impl CartoonPlan {
                     self.recipes.push(recipe(i, t, w0 + (w1 - w0) * t, th, r));
                 }
             }
+            if i + 2 < n && cylinder != cylinder_step(i + 1) {
+                self.recipes.push(recipe(i, 1.0, w1, t1, r1));
+            }
         }
-        let (w, th, r) = profiles[n - 1];
+        let closes_cylinder = cylinder_step(n - 2);
+        let (w, th, r) = profile_in_step(n - 1, closes_cylinder);
         self.recipes.push(recipe(n - 2, 1.0, w, th, r));
+        if closes_cylinder {
+            self.recipes.push(recipe(n - 2, 1.0, 0.0, th, r));
+        }
         span_starts.push(self.recipes.len() as u32 - 1);
         self.joins.extend(base..self.recipes.len() as u32 - 1);
         self.spans
@@ -573,6 +609,9 @@ impl CartoonPlan {
         for (controls, guides) in per_segment {
             frame.controls.extend(controls);
             frame.guides.extend(guides);
+        }
+        for &[first, end] in &self.cylinders {
+            helix::straighten(&mut frame.controls[first as usize..end as usize]);
         }
         frame
     }

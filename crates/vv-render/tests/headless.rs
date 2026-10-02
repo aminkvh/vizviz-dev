@@ -6065,3 +6065,75 @@ fn depth_cue_clears_as_the_camera_closes_on_the_structure() {
         "closer must be clearer: {near_fog} vs {far_fog}"
     );
 }
+
+/// A triangle soup drawn as `MeshDisplay::Lines` covers only a band of
+/// pixels along its edges, in the colour pass and the pick pass alike (a
+/// click inside the triangle falls through), where drawn solid it covers
+/// and picks its whole face.
+#[test]
+fn mesh_lines_draw_and_pick_only_along_the_edges() {
+    use vv_render::{MeshDisplay, Soup};
+    let Some(ctx) = context() else { return };
+    let corners = [
+        glam::Vec3::new(-10.0, -8.0, 0.0),
+        glam::Vec3::new(10.0, -8.0, 0.0),
+        glam::Vec3::new(0.0, 10.0, 0.0),
+    ];
+    let normals = [glam::Vec3::Z; 3];
+    let colors = [vv_render::color::rgba(220, 60, 60); 3];
+    let (w, h) = (256, 256);
+    let camera = Camera::framing(glam::Vec3::ZERO, 12.0);
+    let settings = RenderSettings {
+        occlusion_culling: false,
+        ..Default::default()
+    };
+    let drawn_as = |display: MeshDisplay| {
+        let mut renderer = Renderer::new(ctx.clone(), w, h);
+        let gpu = vv_render::GlycanGpu::upload_soup(
+            &ctx,
+            &Soup {
+                positions: &corners,
+                normals: &normals,
+                colors: &colors,
+                source: std::sync::Arc::new(vec![7, 7, 7]),
+            },
+            display,
+        )
+        .unwrap();
+        let bindings = renderer.bind_glycan(&gpu);
+        let mut encoder = ctx.device.create_command_encoder(&Default::default());
+        renderer.render_all(
+            &mut encoder,
+            &camera,
+            &[],
+            &[CartoonItem {
+                mesh: CartoonMesh::Glycan(&gpu),
+                bindings: &bindings,
+                material: vv_render::Material::default(),
+            }],
+            &[],
+            &[],
+            &settings,
+        );
+        ctx.queue.submit([encoder.finish()]);
+        renderer.after_submit();
+        let pixels = renderer.read_color();
+        let bg = background_of(&pixels);
+        (
+            count_non_background(&pixels, bg),
+            renderer.pick(w / 2, h / 2),
+        )
+    };
+    let (solid, solid_pick) = drawn_as(MeshDisplay::Solid);
+    let (edges, edge_pick) = drawn_as(MeshDisplay::Lines(2.0));
+    assert!(solid > 3_000, "{solid}");
+    assert!(
+        edges > 100 && edges * 4 < solid,
+        "edges {edges} px against {solid} solid"
+    );
+    assert!(
+        matches!(solid_pick, Some(Pick::Atom { .. })),
+        "{solid_pick:?}"
+    );
+    assert_eq!(edge_pick, None, "the face of a wire triangle is empty");
+}

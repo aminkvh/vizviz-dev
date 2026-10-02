@@ -244,23 +244,76 @@ which needs validated secondary-structure assignment (docs/VALIDATION.md).
 
 ## Cartoon and tube scene composition
 
-A cartoon or tube also draws what a reader expects beside the polymer,
-decided per residue from its class and roles (`vv_core::companion`,
+A structure with a polymer loads as a cartoon (`LoadedStructure::new`);
+one without (a small molecule, a box of water) as lines. A cartoon or tube
+draws whatever it cannot as licorice beside the polymer, decided per
+residue from its class and roles (`vv_core::companion`,
 `vv_core::residue_class`) and limited to the rep's selection. Defaults
 (each a `repopt` on/off choice):
 
 | Content | Default | Drawn as |
 | --- | --- | --- |
-| ligands, cofactors (`ligands`) | on | ball-and-stick |
-| ions (`ions`) | on | spheres at half van der Waals radius |
-| glycans (`glycans`) | on | thin sticks |
-| lipids (`lipids`) | on | bound: thin sticks; membrane: lines |
-| water (`water`) | off | ball-and-stick |
-| crystallization additives (`additives`) | off | ball-and-stick |
+| ligands, cofactors (`ligands`) | on | licorice |
+| ions (`ions`) | on | licorice (one 0.3 A ball) |
+| glycans (`glycans`) | on | thin licorice (0.15 A) |
+| lipids (`lipids`) | on | bound: thin licorice; membrane: lines |
+| water (`water`) | off | licorice |
+| crystallization additives (`additives`) | off | licorice |
+| polymer residues the trace cannot draw | always | licorice |
+
+Water and additives are off for a rep over the whole structure but on for a
+rep with its own selection (`selrep`, `addrep`): a selection that names
+waters draws them, and `repopt water off` takes them out again. A polymer
+residue the ribbon cannot reach -- no trace atom, a lone residue, a
+neighbour left out of the selection, or only a side chain selected -- draws
+as licorice rather than not at all (`companions_beside`); an atom no style
+can draw (placeholder residues, hidden alternate locations) is not drawn.
 
 Each kind is its own piece of geometry (`gpu_cache/companions.rs`), so
 picking, selection outlines, transparency, the occlusion volume and the
 path tracer treat it like any other atoms.
+
+`repopt helix cylinder` draws each helix as a straight cylinder (radius
+2.3 A, the CA distance to the axis) instead of a ribbon; strands stay
+arrows and coil stays a tube. The axis is the least-squares line through
+the local helix axis points of four consecutive CAs (Sugeta & Miyazawa
+1967, Biopolymers 5:673; Kahn 1989, Comput. Chem. 13:185; the four-CA
+bisector form of Bansal, Kumar & Velavan 2000, J. Biomol. Struct. Dyn.
+17:811). A helix whose axis points stray more than 1 A from their line is
+cut where they stray most and each part fitted again, so a kinked or curved
+helix is a few cylinders end to end; a helix under four residues stays
+coil. Implementation: each CA's spline control point moves onto its
+cylinder's axis and the sections are round, so the Catmull-Rom spline is
+the straight cylinder and picking, per-residue colour, transparency and
+the path tracer share the ribbon's mesh path (`cartoon/helix.rs`); an end
+is a step to the coil's width, closed by a disc where a chain ends.
+
+## Surface mesh display
+
+`repopt surface mesh` draws a Gaussian, skin or solvent-excluded surface as
+the edges of its triangle mesh, depth-tested and coloured by the rep's
+colouring (each vertex takes its nearest atom's colour); `dots` draws the
+mesh vertices as small balls. `repopt line` sets the edge width in pixels
+(a dot is `line / 10` A in radius). The mesh is built on a worker thread
+(`gpu_cache/surface_mesh.rs`) with surface nets (`vv_core::surface_net`)
+and the old display stays up until it is ready:
+
+| Surface | Mesh from |
+| --- | --- |
+| Gaussian | the density on a grid, each vertex moved onto the exact isosurface (`gaussian_mesh`) |
+| SES | the distance to the nearest probe position, from a Euclidean distance transform of the grid (`ses_mesh`); accurate to about a voxel, where the solid surface is exact |
+| skin | every grid line cast through the exact patch ray roots and membership test; vertices lie on the surface (`skin_mesh`) |
+
+Edges draw through the triangle-soup pipeline the glycan glyphs use: the
+fragment shader keeps only pixels within half the line width of a triangle
+edge (the barycentric coordinate over its screen gradient), in the colour
+and pick passes alike, so a click inside a wire triangle falls through to
+what is behind it and a click on a line names the vertex's atom. The grid
+starts at 0.6 A and grows with the cube root of the atom count above 20,000
+atoms; a mesh of more than four million triangles is refused with a notice,
+and a skin mesh has the solid skin's 200,000-atom limit. A playing
+trajectory remeshes on a worker as it goes. The path tracer draws a mesh
+rep as the solid surface.
 
 A cartoon draws each nucleotide's base (`bases`, `gpu_cache/bases.rs`,
 `vv_core::bases`). `plate` (default) is a slab on the base's real ring

@@ -762,8 +762,45 @@ pub struct CartoonSectionGpu {
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct CartoonParams {
     pub id_base: u32,
-    pub _pad: [u32; 3],
+    /// How a triangle soup is drawn ([`MeshDisplay::params`]); ribbons
+    /// ignore it.
+    pub display: u32,
+    /// Line width, pixels.
+    pub display_width: f32,
+    pub _pad: u32,
     pub material: Material,
+}
+
+impl CartoonParams {
+    pub fn new(id_base: u32, material: Material) -> Self {
+        Self {
+            id_base,
+            display: 0,
+            display_width: 0.0,
+            _pad: 0,
+            material,
+        }
+    }
+}
+
+/// How a triangle soup ([`GlycanGpu`]) is drawn: as filled triangles, or as
+/// their edges, with the line width in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum MeshDisplay {
+    #[default]
+    Solid,
+    Lines(f32),
+}
+
+impl MeshDisplay {
+    /// The `(display, display_width)` of [`CartoonParams`]; the numbers are
+    /// `shaders/glycan_mesh.wgsl`'s.
+    pub fn params(self) -> (u32, f32) {
+        match self {
+            MeshDisplay::Solid => (0, 0.0),
+            MeshDisplay::Lines(width) => (1, width),
+        }
+    }
 }
 
 /// A cartoon on the GPU: its cross-sections and joins
@@ -895,11 +932,7 @@ impl CartoonGpu {
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("cartoon params"),
-                contents: bytemuck::bytes_of(&CartoonParams {
-                    id_base: 0,
-                    _pad: [0; 3],
-                    material: Material::default(),
-                }),
+                contents: bytemuck::bytes_of(&CartoonParams::new(0, Material::default())),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
         Ok(Self {
@@ -963,17 +996,50 @@ pub struct GlycanGpu {
     pub source: std::sync::Arc<Vec<u32>>,
     pub bounds_center: Vec3,
     pub bounds_radius: f32,
+    pub display: MeshDisplay,
+}
+
+/// A triangle soup's vertices: three per triangle, each with its normal,
+/// packed colour (`pack_rgba`) and the real atom a pick on it names.
+pub struct Soup<'a> {
+    pub positions: &'a [Vec3],
+    pub normals: &'a [Vec3],
+    pub colors: &'a [u32],
+    pub source: std::sync::Arc<Vec<u32>>,
 }
 
 impl GlycanGpu {
     /// `mesh`'s triangles (`vv_core::PolytopeMesh`), freshly built for
     /// the current frame.
     pub fn upload(ctx: &GpuContext, mesh: &vv_core::PolytopeMesh) -> Result<Self, OutOfGpuMemory> {
-        let (min, max) = mesh.positions.iter().fold(
+        let colors: Vec<u32> = mesh
+            .colors
+            .iter()
+            .map(|c| color::rgba(c[0], c[1], c[2]))
+            .collect();
+        Self::upload_soup(
+            ctx,
+            &Soup {
+                positions: &mesh.positions,
+                normals: &mesh.normals,
+                colors: &colors,
+                source: std::sync::Arc::new(mesh.source_atom.clone()),
+            },
+            MeshDisplay::Solid,
+        )
+    }
+
+    /// `soup` drawn as `display`.
+    pub fn upload_soup(
+        ctx: &GpuContext,
+        soup: &Soup,
+        display: MeshDisplay,
+    ) -> Result<Self, OutOfGpuMemory> {
+        let (min, max) = soup.positions.iter().fold(
             (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
             |(min, max), &p| (min.min(p), max.max(p)),
         );
-        let (bounds_center, bounds_radius) = if mesh.positions.is_empty() {
+        let (bounds_center, bounds_radius) = if soup.positions.is_empty() {
             (Vec3::ZERO, 1.0)
         } else {
             (
@@ -981,16 +1047,16 @@ impl GlycanGpu {
                 ((max - min).length() * 0.5 + 2.0).max(1.0),
             )
         };
-        let verts: Vec<GlycanVertexGpu> = mesh
+        let verts: Vec<GlycanVertexGpu> = soup
             .positions
             .iter()
-            .zip(&mesh.normals)
-            .zip(&mesh.colors)
-            .map(|((&p, &n), &c)| GlycanVertexGpu {
+            .zip(soup.normals)
+            .zip(soup.colors)
+            .map(|((&p, &n), &color)| GlycanVertexGpu {
                 position: p.to_array(),
                 _pad0: 0.0,
                 normal: n.to_array(),
-                color: color::rgba(c[0], c[1], c[2]),
+                color,
             })
             .collect();
         let vertices = try_buffer_init(
@@ -1002,20 +1068,17 @@ impl GlycanGpu {
         let params = try_buffer_init(
             ctx,
             "glycan params",
-            bytemuck::bytes_of(&CartoonParams {
-                id_base: 0,
-                _pad: [0; 3],
-                material: Material::default(),
-            }),
+            bytemuck::bytes_of(&CartoonParams::new(0, Material::default())),
             wgpu::BufferUsages::UNIFORM,
         )?;
         Ok(Self {
             vertices,
             vertex_count: verts.len() as u32,
             params,
-            source: std::sync::Arc::new(mesh.source_atom.clone()),
+            source: soup.source.clone(),
             bounds_center,
             bounds_radius,
+            display,
         })
     }
 }

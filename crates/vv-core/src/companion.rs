@@ -20,6 +20,10 @@ pub enum Companion {
     BoundLipid,
     MembraneLipid,
     Water,
+    /// A polymer residue the backbone trace did not cover (no trace atom, a
+    /// lone residue, a neighbour left out of the selection). Never returned
+    /// by [`Companion::of`]: it depends on what the drawn trace covers.
+    Untraced,
 }
 
 impl Companion {
@@ -48,6 +52,27 @@ pub fn companions(topology: &Topology) -> Vec<Option<Companion>> {
     (0..topology.residues.len())
         .map(|r| Companion::of(topology.residue_class(r), topology.residue_roles(r)))
         .collect()
+}
+
+/// As [`companions`], with each polymer residue that holds none of the
+/// `traced` atoms (what a drawn cartoon or tube covers) marked
+/// [`Companion::Untraced`]: the residues a ribbon cannot show.
+pub fn companions_beside(topology: &Topology, traced: &[u32]) -> Vec<Option<Companion>> {
+    let mut covered = vec![false; topology.residues.len()];
+    for &a in traced {
+        covered[topology.residue_index[a as usize] as usize] = true;
+    }
+    let mut kinds = companions(topology);
+    for (r, kind) in kinds.iter_mut().enumerate() {
+        let polymer = matches!(
+            topology.residue_class(r),
+            ResidueClass::Protein | ResidueClass::Nucleic
+        );
+        if polymer && !covered[r] {
+            *kind = Some(Companion::Untraced);
+        }
+    }
+    kinds
 }
 
 #[cfg(test)]
