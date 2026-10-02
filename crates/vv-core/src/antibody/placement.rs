@@ -425,18 +425,45 @@ impl Problem<'_> {
     }
 }
 
-fn place_boundary(scheme: Scheme, cur: &mut [Label], residues: &[u8], consensus: &Consensus) {
-    let Some(range) = stretch(cur, BOUNDARY) else {
+/// Base label after which a scheme lets FR3 take letters.
+fn fr3_site(scheme: Scheme) -> u16 {
+    match scheme {
+        Scheme::Martin => 72,
+        _ => 82,
+    }
+}
+
+/// Moves the FR3 letters between sites. The residues keep their order, so
+/// the labels are sorted again.
+fn move_fr3_letters(labels: &mut [Label], from: u16, to: u16) {
+    for l in labels.iter_mut() {
+        if let (Some(letter), true) = (l.insertion(), l.number == from) {
+            *l = Label::with_insertion(to, letter);
+        }
+    }
+    labels.sort_unstable();
+}
+
+/// Decides the CDR-H2 to FR3 split once, in Martin's frame, whichever
+/// scheme is asked for: the split is a property of the residues, and the
+/// schemes differ only in where FR3 letters sit.
+fn place_boundary(scheme: Scheme, cur: &mut [Label], residues: &[u8]) {
+    let (Some(range), Some(consensus)) = (stretch(cur, BOUNDARY), self::consensus(Scheme::Martin))
+    else {
         return;
     };
-    let sites = insertion_sites(scheme, ChainType::Heavy);
+    let mut rule = cur[range.clone()].to_vec();
+    move_fr3_letters(&mut rule, fr3_site(scheme), fr3_site(Scheme::Martin));
+    let sites = insertion_sites(Scheme::Martin, ChainType::Heavy);
     let window = &residues[range.clone()];
-    let problem = Problem::new(consensus, window, &sites, BOUNDARY, &cur[range.clone()]);
-    let rule = problem.score(&cur[range.clone()]);
-    if let (Some(rule), Some((labels, best))) = (rule, problem.solve()) {
-        if best > rule + TIE_MARGIN {
-            cur[range].copy_from_slice(&labels);
-        }
+    let problem = Problem::new(consensus, window, &sites, BOUNDARY, &rule);
+    let (Some(rule_score), Some((mut labels, best))) = (problem.score(&rule), problem.solve())
+    else {
+        return;
+    };
+    if best > rule_score + TIE_MARGIN {
+        move_fr3_letters(&mut labels, fr3_site(Scheme::Martin), fr3_site(scheme));
+        cur[range].copy_from_slice(&labels);
     }
 }
 
@@ -453,6 +480,6 @@ pub(super) fn refine(
         _ => return cur,
     };
     slide_fr2(&mut cur, residues, consensus);
-    place_boundary(scheme, &mut cur, residues, consensus);
+    place_boundary(scheme, &mut cur, residues);
     cur
 }

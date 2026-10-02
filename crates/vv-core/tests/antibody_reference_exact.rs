@@ -35,12 +35,16 @@ use antibody_common::{fingerprint, fixtures, in_pool, read_chains, Chain, Finger
 /// Why a comparison-set domain may differ from ours.
 #[derive(Clone, Copy)]
 enum Evidence {
-    /// Another domain holds the same residues (given) and the reference
-    /// numbers them differently: the flanking chain, not the window, decided.
-    SameWindow(&'static str, &'static str),
-    /// No identical window in the set; the string names the site. The
-    /// evidence output shows the consensus does not single out the
-    /// reference's placement.
+    /// Other domains hold the same residues (given) and the reference
+    /// numbers them differently: the window does not decide the labels, so
+    /// no rule over it can match both.
+    SameWindow(&'static [&'static str], &'static str),
+    /// The loop between these labels has one pattern per length across the
+    /// reference set; this domain is the only one to deviate from it.
+    LoopException(u16, u16),
+    /// No identical window in the set and no rule found; the string names
+    /// the site. The evidence output shows the consensus does not single
+    /// out the reference's placement.
     Open(&'static str),
 }
 
@@ -59,45 +63,136 @@ const fn known(id: &'static str, schemes: &'static str, evidence: Evidence) -> K
     }
 }
 
-use Evidence::{Open, SameWindow};
+use Evidence::{LoopException, Open, SameWindow};
 
 const FR3: &str = "kappa FR3 gap site";
-const START: &str = "N-terminal start";
-const LOOP: &str = "CDR/framework boundary";
+const LAMBDA_START: &str = "lambda N-terminal start";
+const HEAVY_START: &str = "heavy N-terminal start";
 
 const RESIDUAL: &[Known] = &[
-    known("1MFE_1:H", "KCM", SameWindow("1MEX_1:H", "PGLEW")),
-    known("5CEY_1:L", "KCM", SameWindow("5CEY_2:L", "YVRPLSVA")),
-    known("6NNJ_1:L", "KC", SameWindow("5CEY_2:L", "YVRPLSVA")),
+    known(
+        "1MFE_1:H",
+        "KCM",
+        SameWindow(&["1MEX_1:H", "6EAY_1:H"], "PGLEWIG"),
+    ),
+    known("1QFW_1:L", "KCM", LoopException(24, 34)),
     known("3UTZ_1:L", "KCM", Open(FR3)),
     known("4LLV_3:L", "KCM", Open(FR3)),
     known("5EOC_2:L", "KCM", Open(FR3)),
     known("5VTA_2:L", "KCM", Open(FR3)),
     known("6BPC_1:L", "KCM", Open(FR3)),
-    known("1OAY_2:L", "KC", Open(START)),
-    known("3GK8_1:H", "KCM", Open(START)),
-    known("1QFW_1:L", "KCM", Open(LOOP)),
-    known("4YDL_1:H", "KC", Open(LOOP)),
+    known("5CEY_1:L", "KCM", Open(LAMBDA_START)),
+    known("6NNJ_1:L", "KC", Open(LAMBDA_START)),
+    known("1OAY_2:L", "KC", Open(LAMBDA_START)),
+    known("3GK8_1:H", "KCM", Open(HEAVY_START)),
 ];
+
+/// Labels of the stretch of `r` whose reference labels lie in `lo..=hi`.
+fn loop_pattern(r: &Record, lo: u16, hi: u16) -> Vec<Label> {
+    r.reference
+        .iter()
+        .copied()
+        .filter(|l| (lo..=hi).contains(&l.number))
+        .collect()
+}
+
+fn check_loop_exception(recs: &[Record], record: &Record, (lo, hi): (u16, u16)) {
+    let mine = loop_pattern(record, lo, hi);
+    let mut counts: BTreeMap<Vec<Label>, usize> = BTreeMap::new();
+    for r in recs
+        .iter()
+        .filter(|r| r.chain == record.chain && !r.antigen && r.id != record.id)
+    {
+        *counts.entry(loop_pattern(r, lo, hi)).or_default() += 1;
+    }
+    counts.retain(|p, _| p.len() == mine.len());
+    assert!(!counts.contains_key(&mine), "{} is not alone", record.id);
+    let usual = counts.values().max().copied().unwrap_or(0);
+    assert!(usual >= 50, "{}: no common pattern at this length", record.id);
+}
 
 fn check_evidence(recs: &[Record], record: &Record, evidence: Evidence) {
     match evidence {
-        SameWindow(id, window) => {
-            let twin = recs
-                .iter()
-                .find(|r| r.id == id)
-                .unwrap_or_else(|| panic!("{id} missing from the reference set"));
-            let at = |r: &Record| r.sequence.find(window).expect("window in both");
-            let (a, b) = (at(record), at(twin));
+        SameWindow(ids, window) => {
             let span = window.len();
-            assert_ne!(
-                record.reference[a..a + span],
-                twin.reference[b..b + span],
-                "{id} numbers the window alike"
-            );
+            let at = |r: &Record| r.sequence.find(window).expect("window in both");
+            let mine = &record.reference[at(record)..][..span];
+            for id in ids {
+                let other = recs
+                    .iter()
+                    .find(|r| r.id == *id)
+                    .unwrap_or_else(|| panic!("{id} missing from the reference set"));
+                assert_ne!(mine, &other.reference[at(other)..][..span], "{id} agrees");
+            }
         }
+        LoopException(lo, hi) => check_loop_exception(recs, record, (lo, hi)),
         Open(cause) => assert!(!cause.is_empty()),
     }
+}
+
+/// Every loop of the reference set takes one label pattern per length and
+/// chain type, except the listed domains (sole exceptions, see
+/// docs/ANTIBODY.md). The length alone fixes the labels, so a numbering
+/// that follows the pattern cannot be wrong about a loop it was not told
+/// about.
+const LOOPS: [(&str, ChainType, u16, u16); 6] = [
+    ("H1", ChainType::Heavy, 26, 35),
+    ("H3", ChainType::Heavy, 93, 102),
+    ("L1 kappa", ChainType::Kappa, 24, 34),
+    ("L1 lambda", ChainType::Lambda, 24, 34),
+    ("L3 kappa", ChainType::Kappa, 89, 97),
+    ("L3 lambda", ChainType::Lambda, 89, 97),
+];
+
+/// Domains whose loop deviates from the pattern of every other domain of the
+/// same length: 4XCF_1:H against 121 H3 of that length (its SEQRES and
+/// observed sequence equal 4XAW_1:H's, which follows the pattern), 1QFW_1:L
+/// L1.
+const LOOP_EXCEPTIONS: &[&str] = &["4XCF_1:H", "1QFW_1:L"];
+
+#[test]
+#[ignore = "needs fixtures/real/reference; use --release"]
+fn reference_loops_follow_one_pattern_per_length() {
+    for (dir, scheme, _) in SCHEMES {
+        let recs = records(dir, scheme);
+        for (name, chain, lo, hi) in LOOPS {
+            let mut by_length: BTreeMap<usize, BTreeMap<Vec<Label>, Vec<&Record>>> =
+                BTreeMap::new();
+            for r in recs.iter().filter(|r| r.chain == chain && !r.antigen) {
+                let p = loop_pattern(r, lo, hi);
+                by_length.entry(p.len()).or_default().entry(p).or_default().push(r);
+            }
+            for (len, patterns) in by_length {
+                let commonest = patterns.values().map(Vec::len).max().expect("a pattern");
+                for (pattern, domains) in &patterns {
+                    let strays: Vec<&str> = domains
+                        .iter()
+                        .map(|r| r.id.as_str())
+                        .filter(|id| !LOOP_EXCEPTIONS.contains(id))
+                        .collect();
+                    let minority = domains.len() < commonest;
+                    assert!(
+                        !minority || strays.is_empty(),
+                        "{dir} {name} length {len}: {strays:?} deviate ({})",
+                        show(pattern)
+                    );
+                }
+            }
+            let wrong: Vec<&str> = comparison_set(&recs)
+                .into_iter()
+                .map(|i| &recs[i])
+                .filter(|r| r.chain == chain && !LOOP_EXCEPTIONS.contains(&r.id.as_str()))
+                .filter(|r| our_loop(r, lo, hi) != loop_pattern(r, lo, hi))
+                .map(|r| r.id.as_str())
+                .collect();
+            assert!(wrong.is_empty(), "{dir} {name}: ours differ in {wrong:?}");
+        }
+    }
+}
+
+fn our_loop(r: &Record, lo: u16, hi: u16) -> Vec<Label> {
+    let inside = |l: &&Label| (lo..=hi).contains(&l.number);
+    r.ours.iter().filter(inside).copied().collect()
 }
 
 fn pct(agree: usize, total: usize) -> String {
