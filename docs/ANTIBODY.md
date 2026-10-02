@@ -340,9 +340,9 @@ antibody_reference -- --ignored --nocapture` prints the same counts):
 
 | | Domains | Identical before | Identical now | Residues now |
 |---|---|---|---|---|
-| Kabat | 3,625 | 3,490 (96.3%) | 3,604 (99.4%) | 99.87% |
-| Chothia | 3,617 | 3,481 (96.2%) | 3,595 (99.4%) | 99.87% |
-| Martin | 3,605 | 3,539 (98.2%) | 3,585 (99.4%) | 99.87% |
+| Kabat | 3,625 | 3,490 (96.3%) | 3,605 (99.4%) | 99.88% |
+| Chothia | 3,617 | 3,481 (96.2%) | 3,596 (99.4%) | 99.88% |
+| Martin | 3,605 | 3,539 (98.2%) | 3,585 (99.4%) | 99.88% |
 
 Three sets are reported (`antibody_reference_exact.rs`). The **raw** set is
 the table above. The **comparison set** drops what the reference itself did
@@ -353,20 +353,33 @@ domain sequence, different labels; the majority numbering is kept, and with
 no majority all copies go). The reference files carry only renumbered
 labels, so "identical" means identical sequence, not identical deposited
 numbers. 14 chains are typed antigen; the one inconsistent pair is 4XCF_1:H
-and 4XAW_1:H (same 122-residue chain, H3 labelled from 100 in one and from 99
-in the other, one copy each, so both go). Both halves split the sorted
-non-seed PDB ids of the three bundles together, even index and odd index.
+and 4XAW_1:H, one copy each, so both go. Their observed heavy chains are the
+same 122 residues, byte for byte, and the `SEQRES` of chain H is identical
+for the 228 residues of 4XCF (4XAW's has two more at the C-terminus), yet
+the reference labels the H3 `T98 G100 K100A ... F100F` in one and
+`T98 G99 K100 ... F100E` in the other. `SEQRES` carries `G W G W L G` between
+the second Thr and the Lys, of which each file observes one Gly, so the
+reference most likely numbered residues our input does not hold. No rule
+over the observed residues can match both, and it is not a lettering fault:
+across the roughly 1,800 non-antigen heavy domains of each scheme the labels
+of H3 depend on its length alone, one pattern for each length from 4 to 30
+in every scheme
+(`reference_loops_follow_one_pattern_per_length`), and 4XCF_1:H is the only
+domain that deviates. Our H3 reproduces the pattern at every length. The
+same test holds for H1, L1 and L3 (kappa and lambda): one pattern per length,
+with 1QFW_1:L (L1) the only exception. Both halves split the sorted non-seed
+PDB ids of the three bundles together, even index and odd index.
 
 | | Raw | Comparison | Comparison, even half | Comparison, odd half |
 |---|---|---|---|---|
 | Kabat, before | 3,602 / 3,625 | 3,595 / 3,609 | 1,809 / 1,818 | 1,786 / 1,791 |
-| Kabat, now | 3,604 / 3,625 | 3,597 / 3,609 | 1,810 / 1,818 | 1,787 / 1,791 |
+| Kabat, now | 3,605 / 3,625 | 3,598 / 3,609 | 1,811 / 1,818 | 1,787 / 1,791 |
 | Chothia, before | 3,593 / 3,617 | 3,587 / 3,601 | 1,807 / 1,816 | 1,780 / 1,785 |
-| Chothia, now | 3,595 / 3,617 | 3,589 / 3,601 | 1,808 / 1,816 | 1,781 / 1,785 |
+| Chothia, now | 3,596 / 3,617 | 3,590 / 3,601 | 1,809 / 1,816 | 1,781 / 1,785 |
 | Martin, before | 3,582 / 3,605 | 3,577 / 3,589 | 1,801 / 1,808 | 1,776 / 1,781 |
 | Martin, now | 3,585 / 3,605 | 3,580 / 3,589 | 1,803 / 1,808 | 1,777 / 1,781 |
 
-The comparison set is not at 100%: 12 domains (Kabat, Chothia) or 9
+The comparison set is not at 100%: 11 domains (Kabat, Chothia) or 9
 (Martin) remain, listed in `RESIDUAL` of the exact test, which fails on any
 other difference and on a listed one that starts to agree. The held-out
 depositor report did not move (99.58% of residues, Kabat/Chothia-framed
@@ -398,8 +411,8 @@ consensus of the reference numbering itself.
 
 **Consensus.** Per scheme and label, residue counts over the heavy chains of
 the even half of the comparison set (`consensus.rs`, written by
-`tests/antibody_consensus_gen.rs`; labels 36-49 and 57-92 with their
-letters). A residue at a label scores log2 of its frequency there, with
+`tests/antibody_consensus_gen.rs`; labels 36-49 in every scheme, and 57-92
+with their letters in Martin's only). A residue at a label scores log2 of its frequency there, with
 background-weighted pseudocounts (weight 5), over its background frequency;
 labels without data score zero. Light chains and other labels have no table.
 
@@ -411,7 +424,13 @@ is prohibitive: FR2 (36-49), where the block of skipped labels may slide
 (4 bits per label changed, one contiguous block so the residues keep their
 order), and the CDR-H2 tail to FR3 (50-92), a dynamic program over labels 50-65
 skippable at 30 bits and letters at the H2 and FR3 sites movable at 8 bits per
-letter (at most 6 above the rule's count).
+letter (at most 6 above the rule's count). That split is decided once, in
+Martin's frame (FR3 letters after 72), and the result relabeled to Kabat's or
+Chothia's 82: the split is a property of the residues, and the schemes
+disagreed on it for 4YDL_1:H (H2 of 19 residues and FR3 of 30 in Kabat and
+Chothia, 17 and 32 in Martin and in the reference), each running the program
+on its own letter rows. It is the only one of 1,815 heavy domains whose H2/FR3
+residue counts differ between schemes; no other domain moved.
 
 **How it was chosen.** A first version opened every label and letter under one
 price. At every price either it lost whole domains (the reference keeps the
@@ -426,10 +445,11 @@ tried as a third family (leading run plus one block); it either lost kappa and
 lambda stubs or left the three lambda cases unchanged and was dropped.
 
 **Result.** Fixed: 4LLV_3:H (FR2 block, G at 44) and 1QFW_1:H (H2 tail: 65
-skipped, Lys at 66) in all three schemes, and 4YDL_1:H in Martin.
-The even half gained 4LLV_3:H (all schemes) and 4YDL_1:H (Martin), the odd half
-1QFW_1:H; the consensus comes from the even half only, so the odd half's gain
-is validation. No domain that agreed before disagrees now.
+skipped, Lys at 66) in all three schemes, and 4YDL_1:H in all three (Kabat and
+Chothia through the shared split above). The even half gained 4LLV_3:H (all
+schemes) and 4YDL_1:H, the odd half 1QFW_1:H; the consensus comes from the even
+half only, so the odd half's gain is validation. No domain that agreed before
+disagrees now.
 
 **Residual domains.** `VIZVIZ_EVIDENCE=1` prints, for each one, the rule's,
 our and the reference's labels over the differing stretch and every placement
@@ -439,19 +459,21 @@ is among the placements; the question is where it ranks.
 
 | Domain | Site | Reference rank among placements | Consensus |
 |---|---|---|---|
-| 1MFE_1:H | FR2 | 2 of 3 (3.4 vs 3.5 bits) | A tie: the same `PGLEW` window is G42 in 1MEX_1:H and G44 here, so no residue score can separate them |
-| 4LLV_3:L | kappa FR3 | 2 of 10 (11.0 vs 11.1) | A tie |
-| 3UTZ_1:L, 5EOC_2:L, 5VTA_2:L, 6BPC_1:L | kappa FR3 | 2 of 2, 2 of 2, 2 of 3, 3 of 3 | The consensus prefers the rule by 4 to 14 bits; the reference's gap lies elsewhere |
-| 5CEY_1:L, 6NNJ_1:L | lambda start | 1 of 5 (-4.8 vs -12.5; Martin 5CEY by 0.1 bit) | The reference placement is the best, but a start family cannot be opened without losing other lambda stubs (see above); 5CEY_2:L, same residues plus one, starts at 5 |
-| 1OAY_2:L | lambda start | 9 of 36 (6.4 vs 14.2 best) | Not the consensus optimum |
-| 3GK8_1:H | heavy start (`AVHLQG` numbered 3-6, 6A, 6B) | letters, not enumerated; -10.3 vs 0.5 | The consensus prefers the rule |
-| 1QFW_1:L | L1 letters | letters, not enumerated; -8.6 vs -1.3 | The consensus prefers the rule |
-| 4YDL_1:H (Kabat, Chothia) | H2/FR3 boundary | letters; reference -18.5, ours -16.8, rule -86.5 | The reference moves 4 letters to 82A-E; the best placement in the window stops at 82A-C because the data have one 82D and one 82E; fixed in Martin |
+| 1MFE_1:H | FR2 | 2 of 3 (3.4 vs 3.5 bits) | **Tie.** The seven residues `PGLEWIG`, two short of the FR2 run, are G42 in 1MEX_1:H and 6EAY_1:H (`PPGLEWIG`) and G44 in 1MFE_1:H; `PGLEW` is also G42 in 5MHS_1:H. The reference uses both placements for the same local sequence |
+| 1QFW_1:L | L1 letters (kappa, 12 residues) | letters, not enumerated; -8.6 vs -1.3 | **Reference anomaly.** 133 other kappa L1 of 12 residues are `27 27A` (Chothia, Martin `30A`); this one is `27A 27B` (`28 ... 30A 30B`). Its heavy H2 is also the odd one out among the four of its length (we reproduce that one) |
+| 4LLV_3:L, 3UTZ_1:L, 5EOC_2:L, 5VTA_2:L, 6BPC_1:L | kappa FR3 gap site | 2 of 10 (11.0 vs 11.1), 2 of 2, 2 of 2, 2 of 3, 3 of 3 | **Rule not found.** Not a tie: no other chain holds the window (`FSGSGTDFTL`, `RFSGSGGTDF`, `TLNIPVEEEDAA`, `LTRVEAEDAA`, `DLAYFC`). Of the 12 comparison-set kappa domains with a missing FR3 residue the reference's gap sits at 66, 66-67, 68 (three), 74-75, 77 (three), 83 and 82-85; we agree in 7. The consensus prefers the rule by 4 to 14 bits in four of the five, and ties 4LLV_3:L |
+| 5CEY_1:L, 6NNJ_1:L | lambda start | 1 of 5 (-4.8 vs -12.5; Martin 5CEY by 0.1 bit) | **Rule not found.** The reference is consistent (the same `YVRPLSVALG` is Y4 in both), so ours is the miss. `SYVRPLSVALG` (5CEY_2:L) is S5, `VRPLSVALG` (4FQ2_1:L) is V5, `YVSPLSVALG` (4R26_1:L) is Y5: no fixed start or leading count reproduces the four. A consensus over starts reproduces this pair and loses stubs (see above) |
+| 1OAY_2:L | lambda start | 9 of 36 (6.4 vs 14.2 best) | **Rule not found, fault in our start.** `AVVTQESALTT` siblings (1MFE_1:L, 1OAX_1:L, 1IND_1:L) start at 2 and leave 1 and 10 empty; with Gln missing the reference still starts at 2 and drops 9 and 10. The aligner starts at 4 and fills 10; the reference leaves 10 empty in all 375 comparison-set lambda domains, and we do in all but this one. Forbidding 10 alone gives a third labeling, not the reference's |
+| 3GK8_1:H | heavy start (`AVHLQG` numbered 3-6, 6A, 6B) | letters, not enumerated; -10.3 vs 0.5 | **Rule not found.** One chain, two letters in FR1 after a start at 3; nothing like it elsewhere, the consensus prefers the rule |
 
-None of these is shown to be impossible; they are the cases a position-wise
-consensus cannot decide. Conclusion for the comparison set: 99.67% (Kabat,
-3,597 of 3,609), 99.67% (Chothia, 3,589 of 3,601), 99.75% (Martin, 3,580 of
-3,589).
+Fixed this round: 4YDL_1:H in Kabat and Chothia (shared H2/FR3 split above).
+Removed from the list as wrong: the reference twin 4XCF/4XAW stays excluded
+(see above), and 5CEY_2:L is not a twin of 5CEY_1:L (it has an extra leading
+Ser). "Tie" is claimed only where one local sequence takes both labelings in
+different chains of the reference set; the rest are "rule not found".
+
+Conclusion for the comparison set: 99.70% (Kabat, 3,598 of 3,609), 99.70%
+(Chothia, 3,590 of 3,601), 99.75% (Martin, 3,580 of 3,589).
 
 **What the stubs show.** Residues in front of our domain were the largest
 single cause in the previous round, and they show that the reference does

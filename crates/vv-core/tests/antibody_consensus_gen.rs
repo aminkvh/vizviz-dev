@@ -7,20 +7,26 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use vv_core::antibody::ChainType;
+use vv_core::antibody::{ChainType, Scheme};
 
 mod antibody_common;
 use antibody_common::reference::{comparison_set, halves, records, Record, SCHEMES};
 
 const AA: &[u8; 20] = b"ARNDCQEGHILKMFPSTWYV";
-/// Labels the placement step scores: heavy FR2, and CDR-H2's tail through FR3.
-const LABELS: [(u16, u16); 2] = [(36, 49), (57, 92)];
+/// Labels the placement step scores: heavy FR2 in every scheme, and CDR-H2's
+/// tail through FR3 in Martin's, whose frame decides that boundary for all.
+fn labels(scheme: Scheme) -> &'static [(u16, u16)] {
+    match scheme {
+        Scheme::Martin => &[(36, 49), (57, 92)],
+        _ => &[(36, 49)],
+    }
+}
 /// Labels seen in fewer residues are left out; they would score only noise.
 const MIN_RESIDUES: u32 = 1;
 
 type Counts = BTreeMap<(u16, u8), [u16; 20]>;
 
-fn tally(recs: &[Record], half: &BTreeMap<String, usize>) -> Counts {
+fn tally(recs: &[Record], scheme: Scheme, half: &BTreeMap<String, usize>) -> Counts {
     let mut counts = Counts::new();
     for &i in &comparison_set(recs) {
         let r = &recs[i];
@@ -28,7 +34,7 @@ fn tally(recs: &[Record], half: &BTreeMap<String, usize>) -> Counts {
             continue;
         }
         for (aa, label) in r.sequence.bytes().zip(&r.reference) {
-            let scored = LABELS
+            let scored = labels(scheme)
                 .iter()
                 .any(|&(lo, hi)| (lo..=hi).contains(&label.number));
             let Some(a) = AA.iter().position(|&x| x == aa).filter(|_| scored) else {
@@ -59,7 +65,7 @@ fn regenerate_consensus() {
     let half = halves();
     for (dir, scheme, _) in SCHEMES {
         writeln!(out, "    // {dir}\n    &[").unwrap();
-        for ((number, ins), c) in tally(&records(dir, scheme), &half) {
+        for ((number, ins), c) in tally(&records(dir, scheme), scheme, &half) {
             writeln!(out, "        ({number}, {ins}, {c:?}),").unwrap();
         }
         out.push_str("    ],\n");
