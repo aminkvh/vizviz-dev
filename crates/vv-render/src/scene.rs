@@ -85,28 +85,6 @@ pub fn colors_for(scheme: ColorScheme, topology: &Topology) -> Vec<u32> {
             })
             .collect(),
         ColorScheme::Occupancy => colors_from_scalar(&topology.occupancy),
-        ColorScheme::Hydrophobicity => by_residue_scale(topology, color::kyte_doolittle, |v| {
-            color::by_hydropathy(v, color::KD_SCALE)
-        }),
-        ColorScheme::WimleyWhite => by_residue_scale(topology, color::wimley_white, |v| {
-            color::by_hydropathy(-v, color::WW_SCALE)
-        }),
-        ColorScheme::HelixPropensity => by_residue_scale(
-            topology,
-            color::helix_propensity,
-            color::by_helix_propensity,
-        ),
-        ColorScheme::StrandPropensity => by_residue_scale(
-            topology,
-            color::strand_propensity,
-            color::by_strand_propensity,
-        ),
-        ColorScheme::TurnPropensity => {
-            by_residue_scale(topology, color::turn_propensity, color::by_turn_propensity)
-        }
-        ColorScheme::BuriedIndex => {
-            by_residue_scale(topology, color::buried_index, color::by_buried_index)
-        }
         ColorScheme::Zappo => by_residue_lookup(topology, color::by_zappo),
         ColorScheme::Taylor => by_residue_lookup(topology, color::by_taylor),
         ColorScheme::Clustal => by_residue_lookup(topology, color::by_clustal),
@@ -150,24 +128,6 @@ pub fn colors_for(scheme: ColorScheme, topology: &Topology) -> Vec<u32> {
                 .collect()
         }
     }
-}
-
-/// Every atom's residue name through `scale` (a Chou-Fasman-style table,
-/// `None` for a non-standard residue), then `ramp`; atoms `scale` doesn't
-/// cover keep their element colour.
-fn by_residue_scale(
-    topology: &Topology,
-    scale: impl Fn(&str) -> Option<f32>,
-    ramp: impl Fn(f32) -> u32,
-) -> Vec<u32> {
-    (0..topology.atom_count())
-        .map(|a| {
-            let r = topology.residue_index[a] as usize;
-            scale(topology.residue_name(r))
-                .map(&ramp)
-                .unwrap_or_else(|| color::by_element(topology.element[a]))
-        })
-        .collect()
 }
 
 /// Every atom's residue name through a direct name -> colour lookup

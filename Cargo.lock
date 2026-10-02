@@ -3439,6 +3439,7 @@ dependencies = [
  "thiserror 2.0.20",
  "vv-core",
  "vv-io",
+ "vv-scene",
  "wgpu",
 ]
 

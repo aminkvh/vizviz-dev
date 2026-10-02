@@ -8,6 +8,7 @@
 
 pub mod camera;
 pub mod color;
+pub mod coloring;
 pub mod context;
 pub mod lod;
 pub mod occlusion;

@@ -893,34 +893,6 @@ const SWATCHES: [Color32; 16] = [
     Color32::from_rgb(0xD4, 0x5C, 0xB8),
 ];
 
-/// A color, as its swatch; a click opens common colors, a full picker
-/// and a hex field. True when the color changed.
-pub fn color_picker(ui: &mut Ui, color: &mut Color32) -> bool {
-    let t = Tokens::current(ui.ctx());
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(CONTROL_HEIGHT), Sense::click());
-    if ui.is_rect_visible(rect) {
-        let swatch = rect.shrink(space::TIGHT);
-        let stroke = if response.hovered() {
-            t.primary
-        } else {
-            t.border
-        };
-        ui.painter().rect(
-            swatch,
-            CornerRadius::same(radius::CONTROL),
-            *color,
-            Stroke::new(1.0, stroke),
-            StrokeKind::Outside,
-        );
-        focus_ring(ui, &response, radius::CONTROL);
-    }
-    let mut changed = false;
-    egui::Popup::from_toggle_button_response(&response)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| changed = color_editor(ui, response.id, color));
-    changed
-}
-
 /// Common colors, a full picker and a hex field, drawn in place (inside a
 /// popover, where `color_picker`'s own popup would close its parent).
 /// True when the color changed.
@@ -928,20 +900,63 @@ pub fn color_editor(ui: &mut Ui, id: egui::Id, color: &mut Color32) -> bool {
     const COLUMNS: f32 = 8.0;
     let width = COLUMNS * space::WIDE + (COLUMNS - 1.0) * space::TIGHT;
     ui.set_width(width);
-    let mut changed = swatch_grid(ui, color);
+    let mut changed = swatch_row(ui, &SWATCHES, color);
+    changed |= recent_swatches(ui, color);
     ui.add_space(space::GAP);
     changed |= hsv_picker(ui, id, color, width);
     ui.add_space(space::GAP);
     changed |= hex_field(ui, id.with("hex"), color, width);
+    remember_settled(ui, color, changed);
     changed
 }
 
-fn swatch_grid(ui: &mut Ui, color: &mut Color32) -> bool {
+const RECENT_LIMIT: usize = 8;
+
+fn recent_colors_id() -> egui::Id {
+    egui::Id::new("recent-colors")
+}
+
+/// The colors last settled on, newest first, under a caption; nothing
+/// until there is one. They last for the session.
+fn recent_swatches(ui: &mut Ui, color: &mut Color32) -> bool {
+    let recent: Vec<Color32> = ui
+        .data(|d| d.get_temp(recent_colors_id()))
+        .unwrap_or_default();
+    if recent.is_empty() {
+        return false;
+    }
+    ui.add_space(space::TIGHT);
+    caption(ui, "Recent");
+    swatch_row(ui, &recent, color)
+}
+
+/// Adds the color a drag or typing ended on to the recents (once the
+/// pointer is up, so a drag leaves one entry, not hundreds).
+fn remember_settled(ui: &mut Ui, color: &Color32, changed: bool) {
+    let pending = recent_colors_id().with("pending");
+    if changed {
+        ui.data_mut(|d| d.insert_temp(pending, *color));
+    }
+    if ui.input(|i| i.pointer.any_down()) {
+        return;
+    }
+    let Some(settled) = ui.data_mut(|d| d.remove_temp::<Color32>(pending)) else {
+        return;
+    };
+    ui.data_mut(|d| {
+        let recent = d.get_temp_mut_or_default::<Vec<Color32>>(recent_colors_id());
+        recent.retain(|c| *c != settled);
+        recent.insert(0, settled);
+        recent.truncate(RECENT_LIMIT);
+    });
+}
+
+fn swatch_row(ui: &mut Ui, swatches: &[Color32], color: &mut Color32) -> bool {
     let t = Tokens::current(ui.ctx());
     let mut changed = false;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::splat(space::TIGHT);
-        for swatch in SWATCHES {
+        for &swatch in swatches {
             let (r, pick) = ui.allocate_exact_size(Vec2::splat(space::WIDE), Sense::click());
             let current = swatch == *color;
             ui.painter().rect(

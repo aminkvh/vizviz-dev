@@ -9,6 +9,7 @@ use vv_core::fixedbitset::FixedBitSet;
 use vv_core::glam::Vec3;
 use vv_core::{BondTable, CoordSet, Structure};
 
+use crate::coloring::{ColorOverride, Property, PropertyKind};
 use crate::selection::{Mask, SelectionSet};
 use crate::slotmap::{Id, SlotMap};
 use crate::values::ValueChannel;
@@ -68,17 +69,13 @@ pub enum Representation {
 /// What a structure is made of: a material preset.
 pub use vv_core::MaterialPreset as Material;
 
-/// Mirrors `vv_render::color::ColorScheme`, plus `Values`, which names a
-/// per-atom value channel attached to the structure (`LoadedStructure::
-/// values`). Kept separate from the render enum for the same reason as
-/// `Representation`; the renderers resolve `Values` to colors themselves
-/// with `vv_render::colors_from_scalar`.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+/// How a rep's atoms are colored. `vv_render::coloring::colors_of`
+/// resolves it to one color per atom.
+#[derive(Clone, Debug, PartialEq, Default)]
 pub enum ColorScheme {
     #[default]
     Element,
     Chain,
-    BFactor,
     /// Secondary structure: the file's records for a
     /// single structure, DSSP per frame for a trajectory.
     SecondaryStructure,
@@ -90,12 +87,6 @@ pub enum ColorScheme {
     Hetero,
     /// One hue per residue name.
     ResidueName,
-    Occupancy,
-    /// Kyte-Doolittle hydropathy of amino acids.
-    Hydrophobicity,
-    /// Wimley-White (1996) whole-residue octanol hydropathy; same ramp as
-    /// `Hydrophobicity`.
-    WimleyWhite,
     /// One hue per segment id (`Topology::segid`), or per `auth_asym_id`
     /// in a structure with no segment ids.
     SegmentName,
@@ -110,14 +101,6 @@ pub enum ColorScheme {
     Taylor,
     /// Simplified (non-alignment) Clustal colouring (Thompson et al. 1997).
     Clustal,
-    /// Chou-Fasman alpha-helix propensity.
-    HelixPropensity,
-    /// Chou-Fasman beta-strand propensity.
-    StrandPropensity,
-    /// Chou-Fasman turn propensity.
-    TurnPropensity,
-    /// Fraction of residues of this type typically buried.
-    BuriedIndex,
     /// Nucleotide identity (A/C/G/T/U).
     Nucleotide,
     /// Purine (A, G) vs pyrimidine (C, T, U).
@@ -126,9 +109,9 @@ pub enum ColorScheme {
     MoleculeClass,
     /// Every atom one colour (sRGB bytes).
     Constant([u8; 3]),
-    /// Color by the named value channel; falls back to element coloring
-    /// while no channel of that name is attached.
-    Values(String),
+    /// A continuous property on a ramp: B-factor, hydrophobicity, charge,
+    /// a value channel, ...
+    Property(Property),
 }
 
 /// The standard named colours, for `color NAME`.
@@ -161,30 +144,51 @@ fn named_color(name: &str) -> Option<[u8; 3]> {
         .map(|(_, c)| *c)
 }
 
+impl From<PropertyKind> for ColorScheme {
+    fn from(kind: PropertyKind) -> Self {
+        ColorScheme::Property(Property::new(kind))
+    }
+}
+
 impl ColorScheme {
+    /// Every scheme that takes no parameters and is no property or
+    /// solid color, for menus and tests.
+    pub fn plain() -> Vec<ColorScheme> {
+        use ColorScheme::*;
+        vec![
+            Element,
+            Chain,
+            SecondaryStructure,
+            ResidueType,
+            Rainbow,
+            Hetero,
+            ResidueName,
+            SegmentName,
+            Fragment,
+            Zappo,
+            Taylor,
+            Clustal,
+            Nucleotide,
+            PurinePyrimidine,
+            MoleculeClass,
+        ]
+    }
+
     /// The name the command language and session files use.
     pub fn name(&self) -> String {
         match self {
             ColorScheme::Element => "element".into(),
             ColorScheme::Chain => "chain".into(),
-            ColorScheme::BFactor => "b_factor".into(),
             ColorScheme::SecondaryStructure => "structure".into(),
             ColorScheme::ResidueType => "restype".into(),
             ColorScheme::Rainbow => "rainbow".into(),
             ColorScheme::Hetero => "hetero".into(),
             ColorScheme::ResidueName => "resname".into(),
-            ColorScheme::Occupancy => "occupancy".into(),
-            ColorScheme::Hydrophobicity => "hydrophobicity".into(),
-            ColorScheme::WimleyWhite => "ww".into(),
             ColorScheme::SegmentName => "segname".into(),
             ColorScheme::Fragment => "fragment".into(),
             ColorScheme::Zappo => "zappo".into(),
             ColorScheme::Taylor => "taylor".into(),
             ColorScheme::Clustal => "clustal".into(),
-            ColorScheme::HelixPropensity => "helix".into(),
-            ColorScheme::StrandPropensity => "strand".into(),
-            ColorScheme::TurnPropensity => "turn".into(),
-            ColorScheme::BuriedIndex => "buried".into(),
             ColorScheme::Nucleotide => "nucleotide".into(),
             ColorScheme::PurinePyrimidine => "purinepyrimidine".into(),
             ColorScheme::MoleculeClass => "class".into(),
@@ -192,50 +196,59 @@ impl ColorScheme {
                 Some((name, _)) => (*name).into(),
                 None => format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]),
             },
-            ColorScheme::Values(name) => format!("values:{name}"),
+            ColorScheme::Property(p) => p.name(),
         }
     }
 
-    /// Inverse of `name`, accepting the spellings any surface takes:
-    /// `values:NAME` (what `name()` writes, used by session files) and
-    /// `values NAME` (the console's `color values NAME`) both work here,
+    /// Inverse of `name`, accepting every spelling a surface takes (the
+    /// console's `values NAME` as well as the session file's `values:NAME`),
     /// so Python and session files can take exactly what the console does.
-    pub fn parse(name: &str) -> Option<ColorScheme> {
-        match name {
-            "element" => Some(ColorScheme::Element),
-            "chain" => Some(ColorScheme::Chain),
-            "b_factor" | "bfactor" | "b-factor" => Some(ColorScheme::BFactor),
-            "structure" | "ss" | "secondary" => Some(ColorScheme::SecondaryStructure),
-            "restype" | "residue_type" => Some(ColorScheme::ResidueType),
-            "rainbow" | "index" | "spectrum" => Some(ColorScheme::Rainbow),
-            "hetero" | "byhetero" | "cbc" => Some(ColorScheme::Hetero),
-            "resname" | "residue_name" => Some(ColorScheme::ResidueName),
-            "occupancy" => Some(ColorScheme::Occupancy),
-            "hydrophobicity" | "hydropathy" | "kd" => Some(ColorScheme::Hydrophobicity),
-            "ww" | "wimleywhite" | "wimley_white" => Some(ColorScheme::WimleyWhite),
-            "segname" | "segid" | "segment" => Some(ColorScheme::SegmentName),
-            "fragment" => Some(ColorScheme::Fragment),
-            "zappo" => Some(ColorScheme::Zappo),
-            "taylor" => Some(ColorScheme::Taylor),
-            "clustal" => Some(ColorScheme::Clustal),
-            "helix" | "helixpropensity" => Some(ColorScheme::HelixPropensity),
-            "strand" | "strandpropensity" => Some(ColorScheme::StrandPropensity),
-            "turn" | "turnpropensity" => Some(ColorScheme::TurnPropensity),
-            "buried" | "buriedindex" => Some(ColorScheme::BuriedIndex),
-            "nucleotide" | "nuc" => Some(ColorScheme::Nucleotide),
-            "purinepyrimidine" | "purpyr" => Some(ColorScheme::PurinePyrimidine),
-            "class" | "moleculeclass" | "molclass" => Some(ColorScheme::MoleculeClass),
-            other if other.starts_with('#') && other.len() == 7 => {
-                let byte = |i: usize| u8::from_str_radix(&other[i..i + 2], 16).ok();
-                Some(ColorScheme::Constant([byte(1)?, byte(3)?, byte(5)?]))
-            }
-            other if named_color(other).is_some() => named_color(other).map(ColorScheme::Constant),
-            other => other
-                .strip_prefix("values:")
-                .or_else(|| other.strip_prefix("values ").map(str::trim))
-                .filter(|n| !n.is_empty())
-                .map(|n| ColorScheme::Values(n.to_string())),
+    pub fn parse(text: &str) -> Option<ColorScheme> {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        match ColorScheme::parse_words(&words)? {
+            (scheme, used) if used == words.len() => Some(scheme),
+            _ => None,
         }
+    }
+
+    /// A coloring from the front of `words` and how many words it used;
+    /// a property takes its `scale`/`range`/`ramp` words with it, and
+    /// whatever follows (a structure id) is left alone.
+    pub fn parse_words(words: &[&str]) -> Option<(ColorScheme, usize)> {
+        if let Some((property, used)) = Property::parse_words(words) {
+            return Some((ColorScheme::Property(property), used));
+        }
+        let scheme = match *words.first()? {
+            "element" => ColorScheme::Element,
+            "chain" => ColorScheme::Chain,
+            "structure" | "ss" | "secondary" => ColorScheme::SecondaryStructure,
+            "restype" | "residue_type" => ColorScheme::ResidueType,
+            "rainbow" | "index" | "spectrum" => ColorScheme::Rainbow,
+            "hetero" | "byhetero" | "cbc" => ColorScheme::Hetero,
+            "resname" | "residue_name" => ColorScheme::ResidueName,
+            "segname" | "segid" | "segment" => ColorScheme::SegmentName,
+            "fragment" => ColorScheme::Fragment,
+            "zappo" => ColorScheme::Zappo,
+            "taylor" => ColorScheme::Taylor,
+            "clustal" => ColorScheme::Clustal,
+            "nucleotide" | "nuc" => ColorScheme::Nucleotide,
+            "purinepyrimidine" | "purpyr" => ColorScheme::PurinePyrimidine,
+            "class" | "moleculeclass" | "molclass" => ColorScheme::MoleculeClass,
+            other => ColorScheme::Constant(parse_solid(other)?),
+        };
+        Some((scheme, 1))
+    }
+}
+
+/// `#rrggbb` or a name from `NAMED_COLORS`.
+pub fn parse_solid(word: &str) -> Option<[u8; 3]> {
+    match word.strip_prefix('#') {
+        Some(hex) if hex.len() == 6 => {
+            let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+            Some([byte(0)?, byte(2)?, byte(4)?])
+        }
+        Some(_) => None,
+        None => named_color(word),
     }
 }
 
@@ -469,6 +482,9 @@ pub struct LoadedStructure {
     /// name. Persisted as `.npy` sidecars next to a saved session
     /// (`vv_scene::session`).
     pub values: BTreeMap<String, ValueChannel>,
+    /// Colors laid over every rep's coloring, in order, later winning
+    /// (`Command::SetColorOverrides`).
+    pub color_overrides: Vec<ColorOverride>,
     /// Text labels anchored to specific atoms (`Command::SetLabel`),
     /// billboarded in the viewport and following that atom's current
     /// frame position. Keyed by atom index. Persisted in session files
@@ -511,6 +527,7 @@ impl LoadedStructure {
             next_rep_id: 1,
             bonds,
             values: Default::default(),
+            color_overrides: Vec::new(),
             labels: Default::default(),
             measurements: Vec::new(),
             interactions: Default::default(),
@@ -604,9 +621,31 @@ impl LoadedStructure {
         coloring: &'a ColorScheme,
     ) -> Option<(&'a str, &'a ValueChannel)> {
         match coloring {
-            ColorScheme::Values(name) => self.values.get(name).map(|c| (name.as_str(), c)),
+            ColorScheme::Property(Property {
+                kind: PropertyKind::Values(name),
+                ..
+            }) => self.values.get(name).map(|c| (name.as_str(), c)),
             _ => None,
         }
+    }
+
+    /// Each atom's override color at `frame` (`None` where no override
+    /// reaches it), later overrides winning; empty when there are none.
+    /// A target that no longer selects (a stale expression) is skipped.
+    pub fn override_colors(&self, frame: usize) -> Vec<Option<[u8; 3]>> {
+        if self.color_overrides.is_empty() {
+            return Vec::new();
+        }
+        let mut out = vec![None; self.structure.atom_count()];
+        for o in &self.color_overrides {
+            let Ok(atoms) = self.select(&o.target.expression(), frame) else {
+                continue;
+            };
+            for a in atoms.ones() {
+                out[a] = Some(o.color);
+            }
+        }
+        out
     }
 }
 
@@ -765,28 +804,20 @@ mod tests {
 
     #[test]
     fn colorings_round_trip_by_name() {
-        for scheme in [
-            ColorScheme::Element,
-            ColorScheme::ResidueName,
-            ColorScheme::Occupancy,
-            ColorScheme::Hydrophobicity,
-            ColorScheme::WimleyWhite,
-            ColorScheme::SegmentName,
-            ColorScheme::Fragment,
-            ColorScheme::Zappo,
-            ColorScheme::Taylor,
-            ColorScheme::Clustal,
-            ColorScheme::HelixPropensity,
-            ColorScheme::StrandPropensity,
-            ColorScheme::TurnPropensity,
-            ColorScheme::BuriedIndex,
-            ColorScheme::Nucleotide,
-            ColorScheme::PurinePyrimidine,
-            ColorScheme::MoleculeClass,
+        let tuned = Property {
+            kind: PropertyKind::Charge,
+            ramp: Some(crate::coloring::Ramp::Gray),
+            range: Some([-2.0, 0.5]),
+        };
+        let mut schemes = ColorScheme::plain();
+        schemes.extend(PropertyKind::builtin().into_iter().map(ColorScheme::from));
+        schemes.extend([
             ColorScheme::Constant([255, 0, 0]),
             ColorScheme::Constant([1, 2, 3]),
-            ColorScheme::Values("sasa".into()),
-        ] {
+            ColorScheme::from(PropertyKind::Values("sasa".into())),
+            ColorScheme::Property(tuned),
+        ]);
+        for scheme in schemes {
             assert_eq!(
                 ColorScheme::parse(&scheme.name()),
                 Some(scheme.clone()),

@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 vv-core = { workspace = true }
+vv-scene = { workspace = true }
 wgpu = { workspace = true }
 pollster = { workspace = true }
 glam = { workspace = true }

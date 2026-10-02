@@ -224,9 +224,8 @@ fn sasa_colors(input: &ColorInput) -> Vec<Color32> {
 fn name_color(scheme: SeqColor, name: &str) -> Option<u32> {
     match scheme {
         SeqColor::Chemistry => vc::by_residue_type(name).or_else(|| vc::by_nucleotide(name)),
-        SeqColor::Hydrophobicity => {
-            vc::kyte_doolittle(name).map(|v| vc::by_hydropathy(v, vc::KD_SCALE))
-        }
+        SeqColor::Hydrophobicity => vc::kyte_doolittle(name)
+            .map(|v| vc::ramp_color(vv_scene::Ramp::TealWhiteGold, (v + 4.5) / 9.0)),
         SeqColor::Charge => charge_color(name),
         SeqColor::Clustal => vc::by_clustal(name),
         SeqColor::Zappo => vc::by_zappo(name),

@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::coloring::ColorOverride;
 use crate::scene::{
     ActiveSelection, Caption, ColorScheme, LoadedStructure, Material, Measurement, Rep, RepId,
     Representation, Scene, StructureId,
@@ -197,6 +198,12 @@ pub enum Command {
         id: StructureId,
         name: String,
         channel: Option<ValueChannel>,
+    },
+    /// Replaces a structure's color overrides (`LoadedStructure::
+    /// color_overrides`); undo restores the list it replaced.
+    SetColorOverrides {
+        id: StructureId,
+        overrides: Vec<ColorOverride>,
     },
     /// Select exactly `mask` (a pick, or a mask computed elsewhere).
     Select {
@@ -653,6 +660,15 @@ impl Command {
                 }
             }
 
+            Command::SetColorOverrides { id, overrides } => {
+                let loaded = scene
+                    .structures_mut()
+                    .get_mut(id)
+                    .ok_or(SceneError::NoSuchStructure(id))?;
+                let old = std::mem::replace(&mut loaded.color_overrides, overrides);
+                Command::SetColorOverrides { id, overrides: old }
+            }
+
             Command::Select { id, mask } => {
                 if !scene.structures_mut().contains(id) {
                     return Err(SceneError::NoSuchStructure(id));
@@ -909,6 +925,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::coloring::PropertyKind;
     use crate::history::CommandHistory;
     use crate::selection::mask_of_one;
 
@@ -1663,19 +1680,66 @@ mod tests {
                 Command::SetColoring {
                     id,
                     rep: RepId(0),
-                    coloring: ColorScheme::BFactor,
+                    coloring: PropertyKind::BFactor.into(),
                 },
             )
             .unwrap();
         assert_eq!(
             scene.structure(id).unwrap().rep().coloring,
-            ColorScheme::BFactor
+            ColorScheme::from(PropertyKind::BFactor)
         );
         history.undo(&mut scene).unwrap();
         assert_eq!(
             scene.structure(id).unwrap().rep().coloring,
             ColorScheme::Element
         );
+    }
+
+    fn override_of(target: &str, color: [u8; 3]) -> ColorOverride {
+        ColorOverride {
+            target: target.parse().unwrap(),
+            color,
+        }
+    }
+
+    #[test]
+    fn later_overrides_win_and_undo_restores_the_list() {
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::new(100);
+        let id = load(&mut scene, &mut history);
+        let set = |overrides| Command::SetColorOverrides { id, overrides };
+        assert!(scene.structure(id).unwrap().override_colors(0).is_empty());
+
+        let red = [255, 0, 0];
+        let blue = [0, 0, 255];
+        let first = vec![override_of("name CA", red), override_of("atom 1", blue)];
+        history.dispatch(&mut scene, set(first.clone())).unwrap();
+        let loaded = scene.structure(id).unwrap();
+        let colors = loaded.override_colors(0);
+        let ca = loaded.select("name CA", 0).unwrap();
+        assert!(ca.count_ones(..) > 1);
+        for a in ca.ones() {
+            let expected = if a == 1 { blue } else { red };
+            assert_eq!(colors[a], Some(expected), "atom {a}");
+        }
+        assert_eq!(
+            colors.iter().flatten().count(),
+            ca.count_ones(..) + 1 - ca.contains(1) as usize
+        );
+
+        let second = vec![override_of("atom 1", blue), override_of("name CA", red)];
+        history.dispatch(&mut scene, set(second)).unwrap();
+        let loaded = scene.structure(id).unwrap();
+        assert_eq!(
+            loaded.override_colors(0)[1],
+            Some(red),
+            "reordered: CA now last"
+        );
+
+        history.undo(&mut scene).unwrap();
+        assert_eq!(scene.structure(id).unwrap().color_overrides, first);
+        history.undo(&mut scene).unwrap();
+        assert!(scene.structure(id).unwrap().color_overrides.is_empty());
     }
 
     #[test]

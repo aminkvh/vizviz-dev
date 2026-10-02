@@ -11,16 +11,19 @@
 /// app (`vizviz --listen`) refuses a different major version.
 pub const LANGUAGE_VERSION: &str = "2.1.0";
 
+pub mod coloring;
 pub mod command;
 pub mod history;
 pub mod scene;
 pub mod script;
+mod script_color;
 mod select_ops;
 pub mod selection;
 pub mod session;
 pub mod slotmap;
 pub mod values;
 
+pub use coloring::{ColorOverride, ColorTarget, HydroScale, Property, PropertyKind, Ramp};
 pub use command::{Command, SceneError};
 pub use history::CommandHistory;
 pub use scene::{

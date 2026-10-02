@@ -16,8 +16,7 @@ use std::sync::Arc;
 use crate::command::{Command, SceneError};
 use crate::history::CommandHistory;
 use crate::scene::{
-    Caption, ColorScheme, LoadedStructure, Material, Measurement, Rep, RepId, Representation,
-    Scene, StructureId,
+    Caption, LoadedStructure, Material, Measurement, Rep, RepId, Representation, Scene, StructureId,
 };
 use crate::values::ValueChannel;
 
@@ -263,9 +262,9 @@ pub const SPECS: &[Spec] = &[
     Spec {
         id: "color",
         title: "Set coloring",
-        keywords: &["colour", "element", "chain", "bfactor", "values", "structure", "secondary", "restype", "rainbow", "hetero", "resname", "occupancy", "hydrophobicity", "red", "blue"],
-        usage: "color element|chain|structure|restype|resname|rainbow|hetero|bfactor|occupancy|hydrophobicity|NAME|#RRGGBB|values CHANNEL [ID]",
-        help: "Color a structure (default: current) by element, chain, secondary structure, residue type (acidic/basic/polar/nonpolar), rainbow N->C, carbons-by-chain (hetero), B-factor, or an attached value channel (see `values`).",
+        keywords: &["colour", "element", "chain", "bfactor", "values", "structure", "secondary", "restype", "rainbow", "hetero", "resname", "occupancy", "hydrophobicity", "charge", "ramp", "range", "override", "red", "blue"],
+        usage: "color SCHEME [scale KD|WW|EISENBERG] [range MIN MAX] [ramp NAME] [ID] | color values CHANNEL [...] | color set TARGET #RRGGBB [ID] | color unset TARGET|all [ID] | color overrides [ID]",
+        help: "Color the current rep of a structure (default: current) by a scheme: element, chain, segment, resname, restype, structure, rainbow (N->C), class, hetero (carbons by chain), clustal, zappo, taylor, nucleotide, a solid color (#RRGGBB or a name), or a continuous property: hydrophobicity (scale KD, WW or EISENBERG), charge, b_factor, occupancy, helix, strand, turn, buried, or an attached value channel (`values`, e.g. `color values sasa`). A property takes `range MIN MAX` (default: its scale, or the data's own range) and `ramp bwr|rwb|teal-gold|viridis|rainbow|gray`. Overrides apply to every rep of the structure after the scheme, the latest winning where they overlap: `color set TARGET #RRGGBB` with TARGET `element C`, `name CA`, `resname HEM`, `atom 123` (0-based index) or `sel EXPR`; `color unset TARGET` (or `all`) removes them and `color overrides` lists them. Undoable and saved in sessions.",
     },
     Spec {
         id: "values",
@@ -496,7 +495,7 @@ pub fn quote_arg(path: &str) -> String {
 /// The structure named by `word` (a raw id from `structures`), or the
 /// current one when `word` is empty.
 /// The rep that `representation`, `color` and `material` edit.
-fn current_rep(scene: &Scene, id: StructureId) -> RepId {
+pub(crate) fn current_rep(scene: &Scene, id: StructureId) -> RepId {
     scene.structure(id).expect("resolved").rep().id
 }
 
@@ -572,7 +571,7 @@ fn attach_trajectory(
     ))
 }
 
-fn resolve_structure(scene: &Scene, word: &str) -> Result<StructureId, ScriptError> {
+pub(crate) fn resolve_structure(scene: &Scene, word: &str) -> Result<StructureId, ScriptError> {
     if word.is_empty() {
         return current(scene);
     }
@@ -761,15 +760,7 @@ pub fn parse_representation(word: &str) -> Result<Representation, ScriptError> {
     }
 }
 
-fn parse_coloring(word: &str) -> Result<ColorScheme, ScriptError> {
-    ColorScheme::parse(word).ok_or_else(|| {
-        ScriptError(format!(
-            "unknown coloring `{word}`; expected element, chain, bfactor, or values NAME"
-        ))
-    })
-}
-
-fn usage(id: &str) -> ScriptError {
+pub(crate) fn usage(id: &str) -> ScriptError {
     let usage = spec(id).map(|s| s.usage).unwrap_or(id);
     ScriptError(format!("usage: {usage}"))
 }
@@ -1185,42 +1176,7 @@ pub fn run_line(
             history.dispatch(scene, Command::SetFrame { id, frame: n })?;
             Ok(format!("#{} frame {n}", id.to_raw()))
         }
-        "color" => {
-            let (what, mut id_word) = split_verb(rest);
-            if what.is_empty() {
-                return Err(usage("color"));
-            }
-            let coloring = if what == "values" {
-                let (name, after) = split_verb(id_word);
-                if name.is_empty() {
-                    return Err(usage("color"));
-                }
-                id_word = after;
-                ColorScheme::Values(name.to_string())
-            } else {
-                parse_coloring(what)?
-            };
-            let id = resolve_structure(scene, id_word)?;
-            let missing = match &coloring {
-                ColorScheme::Values(name) => !scene
-                    .structure(id)
-                    .expect("resolved")
-                    .values
-                    .contains_key(name),
-                _ => false,
-            };
-            let label = coloring.name();
-            let rep = current_rep(scene, id);
-            history.dispatch(scene, Command::SetColoring { id, rep, coloring })?;
-            Ok(if missing {
-                format!(
-                    "#{} colored by {label} (no such channel yet; drawn by element until `values` attaches it)",
-                    id.to_raw()
-                )
-            } else {
-                format!("#{} colored by {label}", id.to_raw())
-            })
-        }
+        "color" => crate::script_color::run_color(scene, history, rest),
         "values" => {
             let words: Vec<&str> = rest.split_whitespace().collect();
             match words.as_slice() {
@@ -1753,6 +1709,7 @@ pub fn run_script(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scene::ColorScheme;
 
     fn fixture(name: &str) -> String {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -2099,6 +2056,51 @@ mod tests {
     }
 
     #[test]
+    fn color_takes_property_options_and_per_target_overrides() {
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::default();
+        let mut run = |line: &str| run_line(&mut scene, &mut history, line);
+        run(&format!("load {}", fixture("1CRN.cif"))).unwrap();
+
+        let out = run("color hydrophobicity scale ww range -2 2 ramp viridis").unwrap();
+        assert!(
+            out.ends_with("hydrophobicity scale ww range -2 2 ramp viridis"),
+            "{out}"
+        );
+        assert!(run("color charge ramp nope").is_err());
+        assert!(
+            run("color chain range 0 1").is_err(),
+            "no ramp on a plain scheme"
+        );
+        assert!(run("color charge 99").is_err(), "no such structure");
+
+        assert!(run("color set name CA #ff00ff")
+            .unwrap()
+            .contains("46 atoms"));
+        run("color set resname HOH blue").unwrap();
+        run("color set element S #ffff00 0").unwrap();
+        run("color set name CA #00ff00").unwrap();
+        assert_eq!(
+            run("color overrides").unwrap(),
+            "resname HOH #0000ff\nelement S #ffff00\nname CA #00ff00",
+            "a repeated target moves to the end with its new color"
+        );
+        assert!(run("color set name CA nocolor").is_err());
+        assert!(run("color set sel not a valid ( expr #ff0000").is_err());
+        assert!(run("color unset name CB").is_err());
+
+        run("color set sel resname ALA or resid 5 #112233 0").unwrap();
+        run("color unset sel resname ALA or resid 5 0").unwrap();
+        run("color unset element S").unwrap();
+        run("color unset all").unwrap();
+        assert!(run("color overrides")
+            .unwrap()
+            .contains("no color overrides"));
+        run("undo").unwrap();
+        assert_eq!(run("color overrides").unwrap().lines().count(), 2);
+    }
+
+    #[test]
     fn a_full_session_from_text() {
         let mut scene = Scene::new();
         let mut history = CommandHistory::default();
@@ -2226,7 +2228,10 @@ mod tests {
         let out = run_line(&mut scene, &mut history, "color values score").unwrap();
         assert!(!out.contains("no such channel"), "{out}");
         let loaded = scene.structures().next().unwrap().1;
-        assert_eq!(loaded.rep().coloring, ColorScheme::Values("score".into()));
+        assert_eq!(
+            loaded.rep().coloring,
+            ColorScheme::from(crate::coloring::PropertyKind::Values("score".into()))
+        );
         assert_eq!(
             loaded
                 .values_for(&loaded.rep().coloring)

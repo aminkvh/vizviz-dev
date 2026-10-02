@@ -30,12 +30,6 @@ pub enum Kind {
         off: &'static str,
         state: Query,
     },
-    /// A color picker: `get` reads the color shown, and picking one runs
-    /// `verb` followed by its hex (`background #FFFFFF`).
-    Color {
-        get: fn(&AppUi<'_>) -> egui::Color32,
-        verb: &'static str,
-    },
     /// `(label, command)` options; `current` names the current command.
     Choice {
         options: &'static [(&'static str, &'static str)],
@@ -187,22 +181,6 @@ const fn toggle(
     }
 }
 
-const fn color(
-    label: &'static str,
-    icon: &'static str,
-    tip: &'static str,
-    get: fn(&AppUi<'_>) -> egui::Color32,
-    verb: &'static str,
-) -> Action {
-    Action {
-        label,
-        icon,
-        tip,
-        kind: Kind::Color { get, verb },
-        big: false,
-    }
-}
-
 const fn choice(
     label: &'static str,
     icon: &'static str,
@@ -220,33 +198,6 @@ const fn choice(
             current,
             dropdown,
             disabled_when: None,
-        },
-        big: false,
-    }
-}
-
-/// `choice`, disabled (with a tooltip saying why) while `disabled_when`
-/// holds -- e.g. Coloring on a glycan rep.
-#[allow(clippy::too_many_arguments)]
-const fn choice_disabled_when(
-    label: &'static str,
-    icon: &'static str,
-    tip: &'static str,
-    options: &'static [(&'static str, &'static str)],
-    current: Current,
-    dropdown: bool,
-    disabled_when: Query,
-    reason: &'static str,
-) -> Action {
-    Action {
-        label,
-        icon,
-        tip,
-        kind: Kind::Choice {
-            options,
-            current,
-            dropdown,
-            disabled_when: Some((disabled_when, reason)),
         },
         big: false,
     }
@@ -354,15 +305,6 @@ fn rep_style(a: &AppUi<'_>) -> Option<String> {
         vv_scene::session::representation_name(r.representation)
     ))
 }
-/// The current rep is glycan, so its own Coloring choice is
-/// disabled -- SNFG's colours come from the recognized monosaccharide,
-/// not the usual coloring schemes, which this rep silently ignores.
-fn rep_is_glycan(a: &AppUi<'_>) -> bool {
-    current_rep(a).is_some_and(|r| r.representation == vv_scene::Representation::Glycan)
-}
-fn rep_coloring(a: &AppUi<'_>) -> Option<String> {
-    Some(format!("color {}", current_rep(a)?.coloring.name()))
-}
 fn rep_material(a: &AppUi<'_>) -> Option<String> {
     Some(format!("material {}", current_rep(a)?.material.name()))
 }
@@ -377,14 +319,6 @@ fn projection(a: &AppUi<'_>) -> Option<String> {
         vv_render::Projection::Perspective => "view projection perspective".into(),
         vv_render::Projection::Orthographic => "view projection orthographic".into(),
     })
-}
-/// The current rep's single color, or mid gray when it is colored by
-/// something else.
-fn rep_color(a: &AppUi<'_>) -> egui::Color32 {
-    match current_rep(a).map(|r| r.coloring) {
-        Some(vv_scene::ColorScheme::Constant([r, g, b])) => egui::Color32::from_rgb(r, g, b),
-        _ => egui::Color32::GRAY,
-    }
 }
 fn clip_on(a: &AppUi<'_>) -> bool {
     a.view.clip.is_some()
@@ -534,47 +468,54 @@ fn represent_add_rep_popover(app: &mut AppUi<'_>, ui: &mut Ui) {
     ui.close();
 }
 
+/// Every coloring the menus offer as a button, as `(label, command)`,
+/// in the groups `COLORING_GROUPS` starts: by what the structure is, then
+/// by a measured or tabulated property (those take a ramp and range).
 pub(crate) const COLORINGS: &[(&str, &str)] = &[
-    // Atoms
     ("Element", "color element"),
     ("Carbons by chain", "color hetero"),
-    ("B-factor", "color b_factor"),
-    ("Occupancy", "color occupancy"),
-    ("Molecule class", "color class"),
-    // Chains
     ("Chain", "color chain"),
     ("Segment", "color segname"),
     ("Fragment", "color fragment"),
-    ("Structure", "color structure"),
-    ("Rainbow", "color rainbow"),
-    // Residues
+    ("Molecule class", "color class"),
     ("Residue type", "color restype"),
     ("Residue name", "color resname"),
+    ("Secondary structure", "color structure"),
+    ("Sequence position", "color rainbow"),
+    ("Nucleotide", "color nucleotide"),
+    ("Purine/pyrimidine", "color purinepyrimidine"),
     ("Clustal", "color clustal"),
     ("Zappo", "color zappo"),
     ("Taylor", "color taylor"),
+    ("Hydrophobicity (Kyte-Doolittle)", "color hydrophobicity"),
+    (
+        "Hydrophobicity (Wimley-White)",
+        "color hydrophobicity scale ww",
+    ),
+    (
+        "Hydrophobicity (Eisenberg)",
+        "color hydrophobicity scale eisenberg",
+    ),
+    ("Charge", "color charge"),
+    ("B-factor", "color b_factor"),
+    ("Occupancy", "color occupancy"),
     ("Helix propensity", "color helix"),
     ("Strand propensity", "color strand"),
     ("Turn propensity", "color turn"),
     ("Buried index", "color buried"),
-    ("Nucleotide", "color nucleotide"),
-    ("Purine/pyrimidine", "color purinepyrimidine"),
-    // Hydrophobicity
-    ("Kyte-Doolittle", "color hydrophobicity"),
-    ("Wimley-White", "color ww"),
 ];
 
-/// Where each caption in [`COLORINGS`] starts (`coloring_menu_ui`'s group
-/// headings); kept in sync with it by the `every_coloring_round_trips_
-/// and_groups_cover_the_whole_list` test rather than by construction,
-/// since a `const` can't easily carry both a flat list (every other
-/// `COLORINGS` consumer wants that) and its grouping at once.
-pub(crate) const COLORING_GROUPS: &[(&str, usize)] = &[
-    ("Atoms", 0),
-    ("Chains", 5),
-    ("Residues", 10),
-    ("Hydrophobicity", 21),
-];
+/// Where each caption in [`COLORINGS`] starts.
+pub(crate) const COLORING_GROUPS: &[(&str, usize)] = &[("By structure", 0), ("By property", 15)];
+
+/// `color NAME` for a coloring with a property's range and ramp left
+/// out: the command whose button stands for the coloring.
+pub(crate) fn base_command(coloring: &vv_scene::ColorScheme) -> String {
+    match coloring {
+        vv_scene::ColorScheme::Property(p) => format!("color {}", p.kind.name()),
+        other => format!("color {}", other.name()),
+    }
+}
 
 pub(crate) const MATERIALS: &[(&str, &str)] = &[
     ("Opaque", "material opaque"),
@@ -763,21 +704,18 @@ pub const TABS: &[RibbonTab] = &[
             },
             Group {
                 label: "Coloring",
-                actions: &[choice_disabled_when(
-                    "Coloring",
-                    icon::PALETTE,
-                    "G",
-                    COLORINGS,
-                    rep_coloring,
-                    true,
-                    rep_is_glycan,
-                    "SNFG colours are fixed",
-                )],
-            },
-            Group {
-                label: "Custom",
                 actions: &[
-                    color("One color", icon::EYEDROPPER, "1", rep_color, "color "),
+                    Action {
+                        big: true,
+                        ..popover(
+                            "Coloring",
+                            icon::PALETTE,
+                            "G",
+                            "represent.coloring",
+                            &["color ", "color set ", "color unset ", "color overrides"],
+                            crate::coloring_ui::coloring_popover,
+                        )
+                    },
                     prompt("Values", icon::GRAPH, "V", "values "),
                 ],
             },
@@ -1126,7 +1064,7 @@ fn append_current_structure(line: String, id: Option<u32>) -> String {
 /// tab and the row it acts on stay in sync (`AppUi::current`'s doc)
 /// instead of the ribbon silently editing whichever structure loaded last
 /// while the panel shows a different one as current.
-fn with_current_override(line: String, app: &AppUi<'_>) -> String {
+pub(crate) fn with_current_override(line: String, app: &AppUi<'_>) -> String {
     let id = app
         .current_override
         .filter(|&id| app.scene.structure(id).is_some())
@@ -1146,7 +1084,6 @@ fn activate(action: &Action, app: &AppUi<'_>, option: Option<usize>) -> Option<E
                 (*on).into()
             }))
         }
-        Kind::Color { verb, .. } => Some(Effect::Prompt(verb)),
         Kind::Choice { options, .. } => option.map(|i| Effect::Run(options[i].1.into())),
         // Opened directly from the render loop (it needs a `Ui`), and
         // inert: neither reachable via a key tip.
@@ -1186,7 +1123,12 @@ pub fn rep_summary(rep: &vv_scene::Rep) -> String {
 pub fn coloring_label(coloring: &vv_scene::ColorScheme) -> String {
     match coloring {
         vv_scene::ColorScheme::Constant(_) => format!("Solid {}", coloring.name()),
-        _ => option_label(COLORINGS, format!("color {}", coloring.name())),
+        vv_scene::ColorScheme::Property(p)
+            if matches!(p.kind, vv_scene::PropertyKind::Values(_)) =>
+        {
+            p.kind.label()
+        }
+        _ => option_label(COLORINGS, base_command(coloring)),
     }
 }
 
@@ -1486,15 +1428,6 @@ impl AppUi<'_> {
                     .then(|| activate(action, self, None))
                     .flatten()
             }
-            Kind::Color { get, verb } => {
-                let mut picked = get(self);
-                ui.horizontal(|ui| {
-                    let changed = widgets::color_picker(ui, &mut picked);
-                    ui.label(&label);
-                    changed.then(|| Effect::Run(format!("{verb}{}", widgets::hex(picked))))
-                })
-                .inner
-            }
             Kind::Run(_) => {
                 let r = widgets::button(ui, action.icon, &label, Variant::Ghost);
                 with_help(r, action)
@@ -1570,7 +1503,7 @@ fn is_row(action: &Action) -> bool {
 /// The command an action runs first, whose help is its tooltip.
 fn first_command(action: &Action) -> &'static str {
     match &action.kind {
-        Kind::Run(c) | Kind::Prompt(c) | Kind::Color { verb: c, .. } => c,
+        Kind::Run(c) | Kind::Prompt(c) => c,
         Kind::Inline { commands, .. } => commands().first().copied().unwrap_or(""),
         Kind::Toggle { on, .. } | Kind::SwitchEffect { on, .. } => on,
         Kind::Choice { options, .. } => options[0].1,
@@ -1790,7 +1723,7 @@ mod tests {
 
     fn commands_of(action: &Action) -> Vec<&'static str> {
         match &action.kind {
-            Kind::Run(c) | Kind::Prompt(c) | Kind::Color { verb: c, .. } => {
+            Kind::Run(c) | Kind::Prompt(c) => {
                 vec![c]
             }
             Kind::Inline { commands, .. } => commands(),

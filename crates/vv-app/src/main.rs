@@ -14,6 +14,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod app_history;
+mod coloring_ui;
 mod commands;
 mod gif_quant;
 mod gpu_cache;

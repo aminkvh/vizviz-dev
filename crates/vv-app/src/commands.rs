@@ -1014,6 +1014,11 @@ impl AppUi<'_> {
                     self.open_popover("represent", "represent.addrep");
                     return Ok(String::new());
                 }
+                // Represent ▸ Coloring's popover.
+                "color" if rest.is_empty() => {
+                    self.open_popover("represent", "represent.coloring");
+                    return Ok(String::new());
+                }
                 // Analyze ▸ Caption's/Contacts' forms.
                 "caption" if rest.is_empty() => {
                     self.open_popover("analyze", "analyze.caption");
@@ -1526,9 +1531,9 @@ impl AppUi<'_> {
                 if rest.is_empty() {
                     return Err(usage());
                 }
-                // A theme or layout change made just before lands a frame
-                // or two later.
-                *self.ui_shot = Some((rest.into(), 2));
+                // A theme, layout or popover change made just before
+                // lands (and finishes fading in) a few frames later.
+                *self.ui_shot = Some((rest.into(), 12));
                 Ok(format!("capturing the window to {rest}"))
             }
             "window" => {

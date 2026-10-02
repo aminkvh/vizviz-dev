@@ -32,6 +32,7 @@ use fixedbitset::FixedBitSet;
 use serde::{Deserialize, Serialize};
 use vv_core::altloc::AltlocPolicy;
 
+use crate::coloring::{ColorOverride, Property, PropertyKind};
 use crate::command::Command;
 use crate::history::CommandHistory;
 use crate::scene::{
@@ -44,8 +45,9 @@ use crate::values::ValueChannel;
 /// rep). 3: rep options, atom labels and captions. 4: the app's `view`
 /// block also carries the dock layout at save time and playback state --
 /// still opaque here, so a schema-3 file simply lacks them, and loading
-/// one leaves both as they already are.
-pub const SCHEMA_VERSION: u32 = 4;
+/// one leaves both as they already are. 5: per-structure color overrides,
+/// and a continuous coloring's range and ramp inside its name.
+pub const SCHEMA_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SessionFile {
@@ -116,6 +118,48 @@ pub struct SavedStructure {
     /// Atom labels, by atom; absent before schema 3.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub labels: std::collections::BTreeMap<u32, String>,
+    /// `LoadedStructure::color_overrides`; absent before schema 5.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_overrides: Vec<SavedOverride>,
+}
+
+/// A `ColorOverride` as saved: its target as `color set` writes it
+/// (`name CA`) and its color as `#rrggbb`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SavedOverride {
+    pub target: String,
+    pub color: String,
+}
+
+fn saved_override(o: &ColorOverride) -> SavedOverride {
+    let [r, g, b] = o.color;
+    SavedOverride {
+        target: o.target.to_string(),
+        color: format!("#{r:02x}{g:02x}{b:02x}"),
+    }
+}
+
+/// The overrides a session names; one that no longer parses is dropped
+/// with a warning.
+fn restored_overrides(
+    saved: &[SavedOverride],
+    label: &str,
+    warnings: &mut Vec<String>,
+) -> Vec<ColorOverride> {
+    saved
+        .iter()
+        .filter_map(|s| {
+            let parsed = s
+                .target
+                .parse()
+                .ok()
+                .zip(crate::scene::parse_solid(&s.color));
+            if parsed.is_none() {
+                warnings.push(format!("{label}: unreadable color override `{}`", s.target));
+            }
+            parsed.map(|(target, color)| ColorOverride { target, color })
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -362,6 +406,7 @@ pub fn capture(
                 .collect(),
             frame: loaded.frame,
             labels: loaded.labels.clone(),
+            color_overrides: loaded.color_overrides.iter().map(saved_override).collect(),
         });
     }
     let saved = |structure: StructureId, expr: &Option<String>, mask: &FixedBitSet| {
@@ -554,7 +599,11 @@ pub fn apply(file: &SessionFile, scene: &mut Scene, history: &mut CommandHistory
                     Some(rep) => rep,
                     None => continue,
                 };
-                if let ColorScheme::Values(name) = &rep.coloring {
+                if let ColorScheme::Property(Property {
+                    kind: PropertyKind::Values(name),
+                    ..
+                }) = &rep.coloring
+                {
                     let restored = scene
                         .structure(id)
                         .is_some_and(|l| l.values.contains_key(name));
@@ -659,6 +708,14 @@ pub fn apply(file: &SessionFile, scene: &mut Scene, history: &mut CommandHistory
                 };
                 if let Err(e) = history.dispatch(scene, label) {
                     out.warnings.push(format!("{}: label: {e}", s.label));
+                }
+            }
+            let overrides = restored_overrides(&s.color_overrides, &s.label, &mut out.warnings);
+            if !overrides.is_empty() {
+                let set = Command::SetColorOverrides { id, overrides };
+                if let Err(e) = history.dispatch(scene, set) {
+                    out.warnings
+                        .push(format!("{}: color overrides: {e}", s.label));
                 }
             }
             if s.frame != 0 {
@@ -790,7 +847,7 @@ mod tests {
             &mut scene,
             &mut history,
             &format!(
-                "load {}\nload {}\nselect chain A and name CA\nsaveset ca\ncolor chain\nrep ballstick 0\nmaterial glossy 0\naddrep cartoon protein",
+                "load {}\nload {}\nselect chain A and name CA\nsaveset ca\ncolor chain\nrep ballstick 0\nmaterial glossy 0\naddrep cartoon protein\ncolor set name CA #ff00ff\ncolor set sel chain A and helix #00ff00",
                 fixture("4HHB.cif").display(),
                 fixture("1CRN.cif").display()
             ),
@@ -824,7 +881,7 @@ mod tests {
                 Command::SetColoring {
                     id: first,
                     rep: RepId(0),
-                    coloring: ColorScheme::Values("sasa".into()),
+                    coloring: ColorScheme::from(PropertyKind::Values("sasa".into())),
                 },
             )
             .unwrap();
@@ -851,6 +908,16 @@ mod tests {
             temp_path("roundtrip.values").file_name()
         );
         assert_eq!(file.structures[1].reps[0].coloring, "chain");
+        let saved: Vec<_> = file.structures[1]
+            .color_overrides
+            .iter()
+            .map(|o| (o.target.as_str(), o.color.as_str()))
+            .collect();
+        assert_eq!(
+            saved,
+            [("name CA", "#ff00ff"), ("sel chain A and helix", "#00ff00")]
+        );
+        assert!(file.structures[0].color_overrides.is_empty());
         assert_eq!(file.structures[1].reps.len(), 2);
         assert_eq!(file.structures[1].reps[1].selection, "protein");
         assert_eq!(file.structures[1].current_rep, 1);
@@ -892,7 +959,7 @@ mod tests {
         );
         assert_eq!(
             scene2.structure(id0).unwrap().rep().coloring,
-            ColorScheme::Values("sasa".into())
+            ColorScheme::from(PropertyKind::Values("sasa".into()))
         );
         let first = scene2.structure(id0).unwrap();
         let (name, channel) = first.values_for(&first.rep().coloring).unwrap();
@@ -901,6 +968,12 @@ mod tests {
         let second = scene2.structure(id1).unwrap();
         assert_eq!(second.reps.len(), 2);
         assert_eq!(second.reps[0].coloring, ColorScheme::Chain);
+        assert_eq!(
+            second.color_overrides,
+            scene.structures().nth(1).unwrap().1.color_overrides,
+            "overrides survive a session, in order"
+        );
+        assert_eq!(second.color_overrides.len(), 2);
         assert_eq!(second.rep().representation, Representation::Cartoon);
         assert_eq!(second.rep().selection, "protein");
         let set = scene2.selection_set("ca").unwrap();
@@ -1116,7 +1189,7 @@ END
                 Command::SetColoring {
                     id,
                     rep: RepId(0),
-                    coloring: ColorScheme::Values("sasa".into()),
+                    coloring: ColorScheme::from(PropertyKind::Values("sasa".into())),
                 },
             )
             .unwrap();
@@ -1138,7 +1211,7 @@ END
                 .unwrap()
                 .rep()
                 .coloring,
-            ColorScheme::Values("sasa".into())
+            ColorScheme::from(PropertyKind::Values("sasa".into()))
         );
     }
 
@@ -1206,6 +1279,7 @@ END
                     interactions: Vec::new(),
                     frame: 0,
                     labels: Default::default(),
+                    color_overrides: Vec::new(),
                 },
                 SavedStructure {
                     path: fixture("1CRN.cif"),
@@ -1223,6 +1297,7 @@ END
                     interactions: Vec::new(),
                     frame: 0,
                     labels: Default::default(),
+                    color_overrides: Vec::new(),
                 },
             ],
             selection_sets: vec![SavedSet {

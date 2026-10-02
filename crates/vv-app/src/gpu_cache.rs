@@ -40,13 +40,13 @@ use vv_core::Structure;
 use vv_render::renderer::PageBindings;
 use vv_render::scene::vdw_radii;
 use vv_render::{
-    colors_for, colors_from_scalar_in, AtomSizes, Camera, CartoonGpu, CartoonItem,
-    ColorScheme as GpuColorScheme, DrawItem, DrawState, GaussianSurfaceGpu, GaussianSurfaceItem,
-    GpuContext, GpuStructure, OcclusionVolume, OutOfGpuMemory, PatchSurface, PatchSurfaceItem,
-    Renderer, Representation as GpuRepresentation, SesBindings, SesGpu, SesLayout, SkinSurfaceGpu,
+    AtomSizes, Camera, CartoonGpu, CartoonItem, DrawItem, DrawState, GaussianSurfaceGpu,
+    GaussianSurfaceItem, GpuContext, GpuStructure, OcclusionVolume, OutOfGpuMemory, PatchSurface,
+    PatchSurfaceItem, Renderer, Representation as GpuRepresentation, SesBindings, SesGpu,
+    SesLayout, SkinSurfaceGpu,
 };
 use vv_scene::{
-    ColorScheme as SceneColorScheme, LoadedStructure, Rep, RepId,
+    ColorOverride, ColorScheme as SceneColorScheme, LoadedStructure, Rep, RepId,
     Representation as SceneRepresentation, Scene, StructureId, ValueChannel,
 };
 
@@ -101,62 +101,7 @@ pub fn map_representation(r: SceneRepresentation) -> GpuRepresentation {
     }
 }
 
-/// One packed color per atom of `loaded` under `coloring` at `frame`: a
-/// built-in scheme through `colors_for`, or a value channel through
-/// `colors_from_scalar_in` with the channel's whole-trajectory range. A
-/// `Values` coloring whose channel is not attached draws by element.
-pub fn colors_of(loaded: &LoadedStructure, coloring: &SceneColorScheme, frame: usize) -> Vec<u32> {
-    let topology = &loaded.structure.topology;
-    match coloring {
-        SceneColorScheme::Element => colors_for(GpuColorScheme::Element, topology),
-        SceneColorScheme::Chain => colors_for(GpuColorScheme::Chain, topology),
-        SceneColorScheme::BFactor => colors_for(GpuColorScheme::BFactor, topology),
-        SceneColorScheme::SecondaryStructure => {
-            // The same assignment the cartoon draws.
-            let coords = loaded.structure.frame(frame);
-            let positions = coords.positions();
-            let single = loaded.structure.frame_count() == 1;
-            let codes = vv_core::cartoon::secondary_structure(topology, positions, single);
-            vv_render::colors_for_ss(topology, &codes)
-        }
-        SceneColorScheme::ResidueType => colors_for(GpuColorScheme::ResidueType, topology),
-        SceneColorScheme::Rainbow => colors_for(GpuColorScheme::Rainbow, topology),
-        SceneColorScheme::Hetero => colors_for(GpuColorScheme::Hetero, topology),
-        SceneColorScheme::ResidueName => colors_for(GpuColorScheme::ResidueName, topology),
-        SceneColorScheme::Occupancy => colors_for(GpuColorScheme::Occupancy, topology),
-        SceneColorScheme::Hydrophobicity => colors_for(GpuColorScheme::Hydrophobicity, topology),
-        SceneColorScheme::WimleyWhite => colors_for(GpuColorScheme::WimleyWhite, topology),
-        SceneColorScheme::SegmentName => colors_for(GpuColorScheme::SegmentName, topology),
-        SceneColorScheme::Zappo => colors_for(GpuColorScheme::Zappo, topology),
-        SceneColorScheme::Taylor => colors_for(GpuColorScheme::Taylor, topology),
-        SceneColorScheme::Clustal => colors_for(GpuColorScheme::Clustal, topology),
-        SceneColorScheme::HelixPropensity => colors_for(GpuColorScheme::HelixPropensity, topology),
-        SceneColorScheme::StrandPropensity => {
-            colors_for(GpuColorScheme::StrandPropensity, topology)
-        }
-        SceneColorScheme::TurnPropensity => colors_for(GpuColorScheme::TurnPropensity, topology),
-        SceneColorScheme::BuriedIndex => colors_for(GpuColorScheme::BuriedIndex, topology),
-        SceneColorScheme::Nucleotide => colors_for(GpuColorScheme::Nucleotide, topology),
-        SceneColorScheme::MoleculeClass => colors_for(GpuColorScheme::Class, topology),
-        SceneColorScheme::PurinePyrimidine => {
-            colors_for(GpuColorScheme::PurinePyrimidine, topology)
-        }
-        // No `GpuColorScheme` counterpart: needs the bond graph, which
-        // `colors_for(scheme, &Topology)` alone doesn't have access to.
-        SceneColorScheme::Fragment => vv_render::colors_for_fragments(topology, &loaded.bonds),
-        SceneColorScheme::Constant([r, g, b]) => colors_for(
-            GpuColorScheme::Constant(vv_render::color::rgba(*r, *g, *b)),
-            topology,
-        ),
-        SceneColorScheme::Values(name) => match loaded.values.get(name) {
-            Some(channel) => {
-                let (lo, hi) = channel.range();
-                colors_from_scalar_in(channel.frame(frame), lo, hi)
-            }
-            None => colors_for(GpuColorScheme::Element, topology),
-        },
-    }
-}
+pub use vv_render::coloring::colors_of;
 
 /// What a rep's colours were last computed from, so `sync` only rewrites
 /// them when that changed: the scheme, the channel it names (by identity,
@@ -165,6 +110,7 @@ pub fn colors_of(loaded: &LoadedStructure, coloring: &SceneColorScheme, frame: u
 #[derive(Clone)]
 struct ColorKey {
     coloring: SceneColorScheme,
+    overrides: Vec<ColorOverride>,
     channel: Option<ValueChannel>,
     frame: usize,
 }
@@ -172,12 +118,15 @@ struct ColorKey {
 impl ColorKey {
     fn of(loaded: &LoadedStructure, coloring: &SceneColorScheme, frame: usize) -> Self {
         let channel = loaded.values_for(coloring).map(|(_, c)| c.clone());
-        // Per-frame colors: a per-frame channel, or secondary structure
-        // on a trajectory (DSSP on every frame).
+        // Per-frame colors: a per-frame channel, secondary structure on
+        // a trajectory (DSSP on every frame), or overrides whose
+        // selections can move with the atoms.
+        let multi_frame = loaded.structure.frame_count() > 1;
         let frame = match &channel {
             Some(c) if c.frames() > 1 => frame,
-            None if *coloring == SceneColorScheme::SecondaryStructure
-                && loaded.structure.frame_count() > 1 =>
+            None if multi_frame
+                && (*coloring == SceneColorScheme::SecondaryStructure
+                    || !loaded.color_overrides.is_empty()) =>
             {
                 frame
             }
@@ -185,6 +134,7 @@ impl ColorKey {
         };
         Self {
             coloring: coloring.clone(),
+            overrides: loaded.color_overrides.clone(),
             channel,
             frame,
         }
@@ -192,6 +142,7 @@ impl ColorKey {
 
     fn same(&self, other: &Self) -> bool {
         self.coloring == other.coloring
+            && self.overrides == other.overrides
             && self.frame == other.frame
             && match (&self.channel, &other.channel) {
                 (None, None) => true,

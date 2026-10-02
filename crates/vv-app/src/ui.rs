@@ -1708,7 +1708,7 @@ fn coloring_menu_ui(
     ui: &mut Ui,
     coloring: &vv_scene::ColorScheme,
 ) -> Option<vv_scene::ColorScheme> {
-    let now = format!("color {}", coloring.name());
+    let now = crate::ribbon::base_command(coloring);
     use crate::ribbon::{COLORINGS, COLORING_GROUPS};
     let mut picked = None;
     for (g, (heading, start)) in COLORING_GROUPS.iter().enumerate() {
@@ -1802,6 +1802,7 @@ impl AppUi<'_> {
             2.0 * half_height / rect.height().max(1.0),
             background.into(),
         );
+        crate::coloring_ui::legend_overlay(self, ui, rect, background.into());
         self.render_frame_overlay(ui, rect);
     }
 
