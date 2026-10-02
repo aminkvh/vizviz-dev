@@ -29,15 +29,21 @@ fn protein_letter(top: &Topology, residue: u32) -> char {
 }
 
 /// Variable domains in the protein residues `residues`; `start` and `end`
-/// of each are offsets from `residues.start`. Numbered from the chain's
-/// deposited sequence when the file states one.
+/// of each are offsets from `residues.start`. Numbers the modelled
+/// residues alone, as the schemes' authors' reference set does.
 pub fn find_in_residues(top: &Topology, residues: Range<u32>) -> Vec<Domain> {
+    let seq: String = residues.map(|r| protein_letter(top, r)).collect();
+    find_domains(&seq)
+}
+
+/// Like [`find_in_residues`], but numbered from the chain's deposited
+/// sequence when the file states one: unmodelled residues keep their
+/// numbers and leave holes, so a gapped loop is not renumbered as a
+/// shorter one. The reference set closes such loops instead.
+pub fn find_in_residues_deposited(top: &Topology, residues: Range<u32>) -> Vec<Domain> {
     match deposited(top, &residues) {
         Some(full) => find_against(top, residues, full),
-        None => {
-            let seq: String = residues.map(|r| protein_letter(top, r)).collect();
-            find_domains(&seq)
-        }
+        None => find_in_residues(top, residues),
     }
 }
 

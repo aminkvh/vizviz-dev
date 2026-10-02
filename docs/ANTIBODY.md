@@ -398,6 +398,21 @@ first difference (Kabat; Chothia within one domain of it):
 | L1, H3 | 3, 0 | 4, 0 | |
 | Total | 135, 104 | 66, 39 | |
 
+#### Numbering the deposited sequence does not match the reference
+
+`find_domains_in_chain` numbers a chain's deposited sequence (`SEQRES`,
+`entity_poly`) and maps the labels onto the modelled residues, so
+unmodelled residues keep their numbers and leave holes. Tested against the
+reference set it is worse: of the domains that differ between it and
+modelled-only numbering, 278 agreed before and 2 agree after, and none of
+the nine listed misses flipped. The reference numbers the modelled loop by
+its own length (1A0Q heavy: CDR-H3 `GYYGRSNVDY` is deposited, `GYYVDY` is
+modelled, and the reference labels it 95, 96, 97, 98, 101, 102), and its
+framework holes sit where its own aligner puts them, not at the deposited
+positions (5VTA light: the missing `GE` is at 16-17, the reference's hole at
+9-10). `find_in_residues` therefore numbers the modelled residues;
+`find_in_residues_deposited` is the other choice.
+
 ### Placement by consensus
 
 The rules above fix one labeling per domain. The domains still wrong were

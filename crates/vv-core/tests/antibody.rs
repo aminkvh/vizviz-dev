@@ -9,8 +9,8 @@ use antibody_common::{fingerprint, in_pool};
 use proptest::prelude::*;
 use rayon::prelude::*;
 use vv_core::antibody::{
-    find_domains, find_variable_domains, Annotation, CdrDefinition, ChainType, Domain, Label,
-    Region, Scheme,
+    find_domains, find_domains_in_chain, find_variable_domains, Annotation, CdrDefinition,
+    ChainType, Domain, Label, Region, Scheme,
 };
 
 // Trastuzumab Fab (wwPDB 1N8Z): framework/CDR split at the IMGT boundaries.
@@ -65,6 +65,31 @@ fn numbering_is_identical_every_run_and_thread_count() {
         });
         assert!(serial == pooled, "{threads} threads");
     }
+}
+
+#[test]
+fn deposited_numbering_keeps_holes_and_skips_tags() {
+    let full = ["HHHHHH", &trastuzumab_heavy()].concat();
+    let whole = &find_domains(&full)[0];
+    let keep: Vec<usize> = (0..full.len()).filter(|i| !(65..69).contains(i)).collect();
+    let observed: String = keep.iter().map(|&i| full.as_bytes()[i] as char).collect();
+    let found = find_domains_in_chain(&full, &observed);
+    assert_eq!(found.len(), 1);
+    let expected: Vec<(usize, Label)> = whole
+        .numbering(Scheme::Kabat)
+        .into_iter()
+        .filter_map(|(i, l)| Some((keep.iter().position(|&k| k == i)?, l)))
+        .collect();
+    assert_eq!(found[0].numbering(Scheme::Kabat), expected);
+    assert!(found[0].start >= 6, "the tag is not part of the domain");
+}
+
+#[test]
+fn deposited_numbering_falls_back_when_the_sequences_disagree() {
+    let heavy = trastuzumab_heavy();
+    let found = find_domains_in_chain("MKTAYIAKQR", &heavy);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].end, find_domains(&heavy)[0].end);
 }
 
 fn only_domain(seq: &str) -> Domain {

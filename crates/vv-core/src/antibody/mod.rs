@@ -23,7 +23,10 @@ mod topology;
 pub use cdr::{CdrDefinition, Region};
 pub use full::find_domains_in_chain;
 pub use numbering::{Label, Scheme};
-pub use topology::{cdr_residues, chain_domains, find_in_residues, AntibodyCache, CdrResidue};
+pub use topology::{
+    cdr_residues, chain_domains, find_in_residues, find_in_residues_deposited, AntibodyCache,
+    CdrResidue,
+};
 
 use align::{align, Alignment, Slot};
 use profile::{aa_index, profiles, Profile};

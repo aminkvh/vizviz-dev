@@ -124,7 +124,12 @@ impl EntityInfo {
         topology
             .chains
             .iter()
-            .map(|chain| self.sequences.get(&chain.entity).cloned().unwrap_or_default())
+            .map(|chain| {
+                self.sequences
+                    .get(&chain.entity)
+                    .cloned()
+                    .unwrap_or_default()
+            })
             .collect()
     }
 

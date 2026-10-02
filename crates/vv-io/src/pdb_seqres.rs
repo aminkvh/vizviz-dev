@@ -44,10 +44,9 @@ impl Seqres {
             .map(|chain| {
                 let id = topology.names.get(chain.label_asym);
                 match self.chains.get(id).map(chain_kind) {
-                    Some(PolymerHint::Protein) => self.order[id]
-                        .iter()
-                        .map(|n| protein_letter(n))
-                        .collect(),
+                    Some(PolymerHint::Protein) => {
+                        self.order[id].iter().map(|n| protein_letter(n)).collect()
+                    }
                     _ => String::new(),
                 }
             })
