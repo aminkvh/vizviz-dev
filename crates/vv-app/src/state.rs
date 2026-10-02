@@ -92,7 +92,7 @@ pub(crate) struct State {
     /// releasing the hover clears it on its own. `render_scene` reads it
     /// (one frame after the panel sets it, same lag as `draw_order`) to
     /// union its rep's atoms into the viewport's selection outline.
-    row_highlight: Option<(StructureId, vv_scene::RepId)>,
+    row_highlight: Option<crate::selection_outline::Highlight>,
     /// The atom the pointer rests over in the viewport, with no button
     /// held (deliverable: hover glow) -- same one-frame lag as
     /// `row_highlight`, into the same outline.
@@ -466,8 +466,9 @@ impl State {
             &mut self.outline_key,
             &self.scene,
             &self.draw_order,
-            self.row_highlight,
+            self.row_highlight.as_ref(),
             self.hover.atom,
+            self.view.select_tool.level,
         );
 
         // Glass self-occlusion culling can visibly darken a densely
@@ -1073,6 +1074,9 @@ impl State {
                 }
                 None => layout::open_near_viewport(&mut self.dock_state, tab),
             },
+            LayoutRequest::CollapsePanel(tab, collapsed) => {
+                layout::set_collapsed(&mut self.dock_state, tab, collapsed)
+            }
             LayoutRequest::ClosePanel(tab) => {
                 if let Some(found) = self.dock_state.find_tab(&tab) {
                     self.dock_state.remove_tab(found);
@@ -1236,7 +1240,7 @@ impl State {
                 .exact_size(crate::theme::CONTROL_HEIGHT + 2.0 * crate::theme::space::TIGHT)
                 .show(ui, |ui| app_ui.tool_strip_ui(ui));
             egui::CentralPanel::default()
-                .frame(egui::Frame::NONE)
+                .frame(crate::theme::backdrop(app_ui.prefs.theme))
                 .show(ui, |ui| {
                     // Each tab closes from its own x; no second x per panel.
                     // The viewport keeps no header of its own.

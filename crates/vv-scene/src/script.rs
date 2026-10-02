@@ -109,9 +109,14 @@ pub const SPECS: &[Spec] = &[
         id: "select",
         title: "Select atoms",
         keywords: &["expression", "query", "atoms"],
-        usage: "select EXPR | select add EXPR | select invert",
+        usage: "select EXPR | add EXPR | remove EXPR | invert | expand residue|chain|molecule|within N | grow [N] | shrink [N|within N] | interface A [to|with B] [within N]",
         help: "Select atoms of the current structure matching EXPR (docs/SELECTION.md). \
-               `add` keeps the current selection and adds EXPR; `invert` selects what is not selected.",
+               `add` keeps the current selection and adds EXPR, `remove` takes EXPR out of it; `invert` selects what is not selected. \
+               `expand` grows the selection to whole residues, chains or molecules, or to everything \
+               within N Å; `grow`/`shrink` move each selected run N residues along its chain; \
+               `shrink within N` peels off atoms within N Å of the unselected. `interface A to B` \
+               selects the residues of A within N Å of B (`with` adds B's side; no B means any \
+               other polymer; N defaults to 5).",
     },
     Spec {
         id: "clear",
@@ -650,6 +655,7 @@ fn describe_measurement(loaded: &LoadedStructure, m: &Measurement) -> String {
 enum SelectForm<'a> {
     Replace(&'a str),
     Add(&'a str),
+    Remove(&'a str),
     Invert,
 }
 
@@ -659,6 +665,7 @@ fn select_form(rest: &str) -> SelectForm<'_> {
     }
     match rest.split_once(char::is_whitespace) {
         Some(("add", expr)) if !expr.trim().is_empty() => SelectForm::Add(expr.trim()),
+        Some(("remove", expr)) if !expr.trim().is_empty() => SelectForm::Remove(expr.trim()),
         _ => SelectForm::Replace(rest),
     }
 }
@@ -679,13 +686,14 @@ fn combined_selection(
         || vv_core::fixedbitset::FixedBitSet::with_capacity(structure.atom_count()),
         |a| (*a.mask).clone(),
     );
+    let hits_of = |expr: &str| {
+        loaded
+            .select(expr, 0)
+            .map_err(|e| ScriptError(format!("{expr}: {e}")))
+    };
     match form {
-        SelectForm::Add(expr) => {
-            let hits = loaded
-                .select(expr, 0)
-                .map_err(|e| ScriptError(format!("{expr}: {e}")))?;
-            mask.union_with(&hits);
-        }
+        SelectForm::Add(expr) => mask.union_with(&hits_of(expr)?),
+        SelectForm::Remove(expr) => mask.difference_with(&hits_of(expr)?),
         SelectForm::Invert => mask.toggle_range(..),
         SelectForm::Replace(_) => unreachable!("Replace goes through SelectExpr"),
     }
@@ -907,6 +915,9 @@ pub fn run_line(
         "select" => {
             if rest.is_empty() {
                 return Err(usage("select"));
+            }
+            if let Some(done) = crate::select_ops::run(scene, history, rest)? {
+                return Ok(done);
             }
             let id = current(scene)?;
             match select_form(rest) {

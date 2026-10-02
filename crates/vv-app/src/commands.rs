@@ -107,15 +107,15 @@ pub const VIEW_ENTRIES: &[Entry] = &[
         id: "selectmode",
         title: "Selection tool",
         keywords: &["select", "box", "circle", "lasso", "atom", "residue", "chain", "molecule", "drag", "home", "tool", "level"],
-        usage: "selectmode shape click|box|circle|lasso|toggle|next | level atom|residue|chain|molecule|next | flyout shapes|more",
+        usage: "selectmode shape click|box|circle|lasso|toggle|next | level atom|residue|chain|molecule|next | flyout shapes|more|interface",
         help: "Home > Select: what a left drag in the viewport selects. `shape` draws a box, \
                circle or freehand lasso and selects the atoms of the visible reps inside it \
                on release (Shift adds, Ctrl or Alt subtracts); `click` goes back to \
                orbiting, `toggle` switches between `click` and the last shape used, and \
                `next` (the Q key) cycles the shapes. `level` grows the hits to their whole \
                residues, chains or molecules (connected atoms); `level next` cycles it. \
-               `flyout shapes` and `flyout more` open the tool's shape flyout and the Quick \
-               select \"More…\" flyout.",
+               `flyout shapes`, `flyout more` and `flyout interface` open the tool's shape \
+               flyout, the By type \"More…\" flyout and the Interface form.",
     },
     Entry {
         id: "ribbon",
@@ -128,8 +128,9 @@ pub const VIEW_ENTRIES: &[Entry] = &[
         id: "panel",
         title: "Show panel",
         keywords: &["window", "tab", "dock", "open", "inspector", "log", "timeline", "look", "settings"],
-        usage: "panel viewport|scene|selection|inspector|sequence|log|info|timeline|movie",
+        usage: "panel viewport|scene|selection|inspector|sequence|log|info|timeline|movie [collapse|expand]",
         help: "Show a dock panel (reopening it if it was closed) and bring it to the front. \
+               `collapse` folds a panel to its tab bar and `expand` opens it again. \
                `settings`/`look` open the Look ribbon tab instead (its panel is gone).",
     },
     Entry {
@@ -1374,6 +1375,7 @@ impl AppUi<'_> {
                 let key = match rest.strip_prefix("flyout").map(str::trim) {
                     Some("shapes") => crate::home::SHAPES_FLYOUT,
                     Some("more") => crate::home::MORE_FLYOUT,
+                    Some("interface") => crate::home_interface::FORM_FLYOUT,
                     _ => return Err(usage()),
                 };
                 self.open_popover("home", key);
@@ -1381,6 +1383,9 @@ impl AppUi<'_> {
             }
             "selectmode" => {
                 self.view.select_tool.set(rest).map_err(|()| usage())?;
+                if rest.starts_with("level") {
+                    self.snap_selection_to_level();
+                }
                 if self.view.select_tool.draws() {
                     self.view.mouse_mode = crate::ui::MouseMode::Rotate;
                 }
@@ -1425,6 +1430,12 @@ impl AppUi<'_> {
             "panel" if rest.is_empty() => {
                 self.open_popover("view", "view.panels");
                 Ok("panel".into())
+            }
+            "panel" if rest.ends_with(" collapse") || rest.ends_with(" expand") => {
+                let (name, how) = rest.rsplit_once(' ').ok_or_else(usage)?;
+                let tab = crate::ribbon::panel_named(name).ok_or_else(usage)?;
+                *self.layout_request = Some(LayoutRequest::CollapsePanel(tab, how == "collapse"));
+                Ok(format!("{how} {}", tab.title()))
             }
             "panel" => {
                 let tab = crate::ribbon::panel_named(rest).ok_or_else(usage)?;

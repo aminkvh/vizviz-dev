@@ -15,6 +15,7 @@ use vv_render::{AdaptiveLod, Camera, LightingPreset, Pick, Renderer, StylePreset
 use vv_scene::{empty_mask, Command, CommandHistory, Scene, StructureId};
 
 use crate::layout::Tab;
+use crate::select_tool::{Combine, SelectLevel};
 use crate::widgets::{self, count, Variant};
 use crate::{measure, viewport};
 
@@ -151,34 +152,7 @@ impl MouseMode {
     }
 }
 
-/// What the Inspector shows of the active selection: its atoms per
-/// element. Built when the selection changes, not every frame: a
-/// 4M-atom selection is a 4M-bit mask.
-#[derive(Default)]
-pub struct SelectionSummary {
-    /// The selection's mask, by address.
-    key: Option<usize>,
-    by_element: Vec<(&'static str, usize)>,
-}
-
-impl SelectionSummary {
-    fn of(
-        mask: &vv_core::fixedbitset::FixedBitSet,
-        loaded: &vv_scene::LoadedStructure,
-        key: usize,
-    ) -> Self {
-        let mut by_element = std::collections::BTreeMap::<&'static str, usize>::new();
-        for atom in mask.ones() {
-            *by_element
-                .entry(Element::symbol(loaded.structure.topology.element[atom]))
-                .or_default() += 1;
-        }
-        Self {
-            key: Some(key),
-            by_element: by_element.into_iter().collect(),
-        }
-    }
-}
+pub use crate::selection_panel::SelectionSummary;
 
 /// A message shown over the viewport for a few seconds: red for
 /// failures, blue for information (e.g. what's already loaded).
@@ -474,6 +448,8 @@ pub enum LayoutRequest {
     Save(String),
     /// Show a panel, reopening it if closed.
     OpenPanel(Tab),
+    /// Fold a panel's leaf to its tab bar, or open it again.
+    CollapsePanel(Tab, bool),
     /// Close a panel (View ▸ Panels ▾'s checklist; a no-op if already
     /// closed).
     ClosePanel(Tab),
@@ -914,7 +890,7 @@ pub struct AppUi<'a> {
     pub current_override: &'a mut Option<StructureId>,
     /// A selection row hovered or current this frame (`State::
     /// row_highlight`'s doc): the viewport outlines its atoms.
-    pub row_highlight: &'a mut Option<(StructureId, vv_scene::RepId)>,
+    pub row_highlight: &'a mut Option<crate::selection_outline::Highlight>,
     /// The atom under the pointer, with no button held (`State::hover`).
     pub hover: &'a mut crate::viewport::HoverPick,
     /// The viewport's pending Ctrl+click measurement chain.
@@ -1371,6 +1347,23 @@ impl AppUi<'_> {
             id,
             mask: std::sync::Arc::new(bits),
         });
+    }
+
+    /// A click on `atom`: at atom level it extends the click-order chain
+    /// (Ctrl also starts a measurement); at a coarser level it picks the
+    /// whole residue, chain or molecule, and Ctrl subtracts as it does for
+    /// drags (a measurement is atom-only).
+    fn click_atom(&mut self, id: StructureId, atom: u32, how: Combine, ctrl: bool) {
+        let atom_level = self.view.select_tool.level == SelectLevel::Atom;
+        if !atom_level || how == Combine::Subtract {
+            let how = if ctrl { Combine::Subtract } else { how };
+            self.pick_at_level(id, atom, how);
+            return;
+        }
+        self.select_atoms(id, &[atom], how == Combine::Add || ctrl);
+        if ctrl {
+            self.push_measure(id, atom);
+        }
     }
 
     /// The selected atoms in the order they were clicked, when the
@@ -1975,14 +1968,7 @@ impl AppUi<'_> {
         let Some(region) = crate::select_tool::Region::from_path(shape, &path) else {
             return;
         };
-        use crate::select_tool::Combine;
-        let how = ui.input(
-            |i| match (i.modifiers.shift, i.modifiers.command || i.modifiers.alt) {
-                (_, true) => Combine::Subtract,
-                (true, false) => Combine::Add,
-                (false, false) => Combine::Replace,
-            },
-        );
+        let how = crate::select_tool::combine_for(ui.input(|i| i.modifiers), true);
         let size = (response.rect.width(), response.rect.height());
         self.select_in_region(&region, size, how);
     }
@@ -2071,7 +2057,9 @@ impl AppUi<'_> {
         if response.clicked() && !response.double_clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let (px, py) = viewport::pointer_pixel(pos, response.rect, rw, rh);
-                let add = ctrl;
+                let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+                let add = ctrl || shift;
+                let how = crate::select_tool::combine_for(ui.input(|i| i.modifiers), false);
                 let pick = self.renderer.pick(px, py);
                 // `item` indexes the draw list of the frame just rendered,
                 // which `draw_order` mirrors (see `State::render_scene`).
@@ -2097,10 +2085,7 @@ impl AppUi<'_> {
                     Some(Pick::Atom { item, atom }) => {
                         if let Some(source) = self.draw_order.get(item) {
                             let (id, atom) = (source.id, source.atom(atom));
-                            self.select_atoms(id, &[atom], add);
-                            if add {
-                                self.push_measure(id, atom);
-                            }
+                            self.click_atom(id, atom, how, ctrl);
                         }
                     }
                     Some(Pick::Bond { item, bond }) => {
@@ -2126,7 +2111,7 @@ impl AppUi<'_> {
                         }
                     }
                     None => {
-                        if !add {
+                        if !add && !alt {
                             self.dispatch(Command::ClearSelection);
                         }
                     }
@@ -2164,6 +2149,7 @@ impl AppUi<'_> {
             .show(|ui| mouse_bindings_popup(ui, left_drag));
 
         self.update_hover(ui, &response, rw, rh);
+        self.hover_tooltip(ui, &response);
 
         let right_click = response
             .secondary_clicked()
@@ -2252,6 +2238,22 @@ impl AppUi<'_> {
             ui.ctx().request_repaint();
         }
         self.hover.atom = picked;
+    }
+
+    /// Names what is under the pointer, at the pick level.
+    fn hover_tooltip(&self, ui: &Ui, response: &egui::Response) {
+        let Some((id, atom)) = self.hover.atom else {
+            return;
+        };
+        if ui.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        let Some(loaded) = self.scene.structure(id) else {
+            return;
+        };
+        let level = self.view.select_tool.level;
+        let label = viewport::hover_label(&loaded.structure.topology, atom, level);
+        response.clone().on_hover_text_at_pointer(label);
     }
 
     /// Adds `atom` to the pending Ctrl+click measure chain, dispatching
@@ -2411,7 +2413,7 @@ impl AppUi<'_> {
     }
 
     /// Brings `selection_summary` up to the active selection.
-    fn refresh_selection_summary(&mut self) {
+    pub(crate) fn refresh_selection_summary(&mut self) {
         let Some(active) = self.scene.active_selection() else {
             return;
         };
@@ -2576,6 +2578,13 @@ impl AppUi<'_> {
                     })
                     .clicked();
             });
+            if ui
+                .ctx()
+                .input(|i| i.pointer.hover_pos())
+                .is_some_and(|p| pick.rect.contains(p))
+            {
+                *self.row_highlight = Some(crate::selection_outline::Highlight::Structure(id));
+            }
             if pick.clicked() {
                 *self.current_override = Some(id);
             }
@@ -2664,7 +2673,9 @@ impl AppUi<'_> {
                     self.rep_options_ui(ui, id, rep);
                 });
         }
-        *self.row_highlight = hovered_rep.map(|rep| (id, rep));
+        if let Some(rep) = hovered_rep {
+            *self.row_highlight = Some(crate::selection_outline::Highlight::Rep(id, rep));
+        }
         ui.add_space(crate::theme::space::TIGHT);
         self.add_selection_ui(ui, id, &reps);
     }
@@ -2962,7 +2973,11 @@ impl AppUi<'_> {
     /// The current structure's selection layers (`selections_ui`).
     fn selection_ui(&mut self, ui: &mut Ui) {
         match self.current() {
-            Some(id) => self.selections_ui(ui, id),
+            Some(id) => {
+                self.selection_overview_ui(ui);
+                widgets::section(ui, "Representations");
+                self.selections_ui(ui, id);
+            }
             None => {
                 let icon = egui_phosphor::regular::SELECTION;
                 if widgets::empty_state(ui, icon, "No structure yet", "Open a structure") {

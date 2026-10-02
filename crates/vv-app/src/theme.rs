@@ -262,6 +262,13 @@ pub fn apply(ctx: &egui::Context, mode: ThemeMode) {
     });
 }
 
+/// The central panel's frame: no margin, but filled, so what a collapsed
+/// dock leaf leaves uncovered shows the theme's background, not the black
+/// the window is cleared to.
+pub fn backdrop(mode: ThemeMode) -> egui::Frame {
+    egui::Frame::NONE.fill(Tokens::of(mode).bg)
+}
+
 /// The dock's panels, tab bars and splitters in `mode`'s tokens. Tab
 /// bodies have no margin: the viewport fills its panel to the edge, and
 /// every other panel pads itself (`space::PAD`).
@@ -326,6 +333,16 @@ mod tests {
         };
         let (x, y) = (lum(a), lum(b));
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn the_backdrop_is_never_the_black_window_clear() {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let fill = backdrop(mode).fill;
+            assert_eq!(fill, Tokens::of(mode).bg);
+            assert_ne!(fill, Color32::BLACK, "{mode:?}");
+        }
+        assert!(Tokens::of(ThemeMode::Light).bg.r() > 200);
     }
 
     #[test]

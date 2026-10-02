@@ -638,33 +638,43 @@ pub const TABS: &[RibbonTab] = &[
         shown: None,
         groups: &[
             Group {
-                label: "Tool",
+                label: "Select",
                 actions: &[inline(
-                    "Select tool",
+                    "Select tool and pick level",
                     icon::SELECTION,
                     "S",
-                    crate::home::tool_commands,
-                    crate::home::tool_row,
+                    crate::home::select_commands,
+                    crate::home::select_row,
                 )],
             },
             Group {
-                label: "Level",
+                label: "By type",
                 actions: &[inline(
-                    "Pick level",
-                    icon::HEXAGON,
-                    "L",
-                    crate::home::level_commands,
-                    crate::home::level_row,
-                )],
-            },
-            Group {
-                label: "Quick select",
-                actions: &[inline(
-                    "Quick select",
+                    "Quick select by type",
                     icon::SPIRAL,
-                    "Q",
+                    "T",
                     crate::home::quick_commands,
                     crate::home::quick_row,
+                )],
+            },
+            Group {
+                label: "Modify",
+                actions: &[inline(
+                    "Modify the selection",
+                    icon::SELECTION_INVERSE,
+                    "M",
+                    crate::home::modify_commands,
+                    crate::home::modify_row,
+                )],
+            },
+            Group {
+                label: "Interface",
+                actions: &[inline(
+                    "Interface residues",
+                    crate::home_interface::CHAINS_ICON,
+                    "I",
+                    crate::home_interface::commands,
+                    crate::home_interface::interface_row,
                 )],
             },
             Group {
@@ -675,16 +685,6 @@ pub const TABS: &[RibbonTab] = &[
                     "R",
                     crate::home::view_commands,
                     crate::home::view_row,
-                )],
-            },
-            Group {
-                label: "Edit",
-                actions: &[inline(
-                    "Undo and redo",
-                    icon::ARROW_COUNTER_CLOCKWISE,
-                    "Z",
-                    crate::home::edit_commands,
-                    crate::home::edit_row,
                 )],
             },
         ],
@@ -1734,13 +1734,13 @@ mod tests {
         ("load", "Open covers it (`open PATH` loads and frames)"),
         (
             "select",
-            "clicking atoms, or a Selections row's ⋯ ▸ Select these atoms",
+            "clicking atoms, Home's By type, Modify and Interface groups, or a Selections row's ⋯ ▸ Select these atoms",
         ),
         ("clear", "Escape in the viewport"),
-        ("saveset", "command line only (named sets have no panel)"),
-        ("useset", "command line only (named sets have no panel)"),
-        ("deleteset", "command line only (named sets have no panel)"),
-        ("sets", "command line only (named sets have no panel)"),
+        ("saveset", "the Selections panel's Save set"),
+        ("useset", "a saved set's row in the Selections panel"),
+        ("deleteset", "a saved set row's own x in the Selections panel"),
+        ("sets", "the Selections panel lists the saved sets"),
         (
             "structures",
             "the Structures panel's rows are its clickable form",

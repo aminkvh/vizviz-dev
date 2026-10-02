@@ -1,23 +1,64 @@
 //! The viewport's selection outline: which drawn pick ids belong to the
-//! active selection, a Structures-panel row's hover/current highlight, or
-//! the hovered atom's residue (`Renderer::set_selection`) -- all three
-//! share the same outline, unioned per atom.
+//! active selection, a panel row's highlight, or what a click on the
+//! hovered atom would pick (`Renderer::set_selection`) -- all three share
+//! the same outline, unioned per atom.
 
 use std::sync::Arc;
 
+use vv_core::fixedbitset::FixedBitSet;
 use vv_render::{ItemSelection, Renderer};
-use vv_scene::{ActiveSelection, LoadedStructure, RepId, Scene, StructureId};
+use vv_scene::{ActiveSelection, LoadedStructure, Mask, RepId, Scene, StructureId};
 
 use crate::gpu_cache::DrawSource;
+use crate::select_tool::{picked_atoms, SelectLevel};
+
+/// What a hovered panel row asks the viewport to outline.
+#[derive(Clone, Debug)]
+pub enum Highlight {
+    /// One rep's atoms.
+    Rep(StructureId, RepId),
+    /// Every atom of a structure.
+    Structure(StructureId),
+    /// A saved set's atoms.
+    Atoms(StructureId, Mask),
+}
+
+type HighlightKey = (StructureId, usize, usize);
+
+impl Highlight {
+    /// Identity for change detection: the mask by address, never by content.
+    fn key(&self) -> HighlightKey {
+        match self {
+            Self::Rep(id, rep) => (*id, 0, rep.0 as usize),
+            Self::Structure(id) => (*id, 1, 0),
+            Self::Atoms(id, mask) => (*id, 2, Arc::as_ptr(mask) as usize),
+        }
+    }
+
+    fn covers_source(&self, source: &DrawSource) -> bool {
+        match self {
+            Self::Rep(id, rep) => (*id, *rep) == (source.id, source.rep),
+            Self::Structure(id) => *id == source.id,
+            Self::Atoms(..) => false,
+        }
+    }
+
+    fn atoms_of(&self, id: StructureId) -> Option<&Mask> {
+        match self {
+            Self::Atoms(set, mask) if *set == id => Some(mask),
+            _ => None,
+        }
+    }
+}
 
 /// What the renderer's selection bits were last built from: the active
-/// mask by address, the row highlight, the hovered atom, and each draw
-/// source's structure and maps by address.
+/// mask by address, the row highlight, the hovered atom and pick level,
+/// and each draw source's structure and maps by address.
 #[derive(Default, PartialEq)]
 pub struct OutlineKey {
     mask: Option<usize>,
-    highlight: Option<(StructureId, RepId)>,
-    hover: Option<(StructureId, u32)>,
+    highlight: Option<HighlightKey>,
+    hover: Option<(StructureId, u32, SelectLevel)>,
     sources: Vec<(StructureId, usize, usize)>,
 }
 
@@ -25,15 +66,16 @@ impl OutlineKey {
     pub fn of(
         scene: &Scene,
         sources: &[DrawSource],
-        highlight: Option<(StructureId, RepId)>,
+        highlight: Option<&Highlight>,
         hover: Option<(StructureId, u32)>,
+        level: SelectLevel,
     ) -> Self {
         Self {
             mask: scene
                 .active_selection()
                 .map(|a| Arc::as_ptr(&a.mask) as usize),
-            highlight,
-            hover,
+            highlight: highlight.map(Highlight::key),
+            hover: hover.map(|(id, atom)| (id, atom, level)),
             sources: sources
                 .iter()
                 .map(|s| (s.id, address(&s.atom_map), address(&s.bond_atoms)))
@@ -43,18 +85,20 @@ impl OutlineKey {
 }
 
 /// Rebuilds `renderer`'s selection bits when the selection, the row
-/// highlight, the hovered atom, or the draw list changed since `last`.
+/// highlight, the hovered atom, the pick level or the draw list changed
+/// since `last`.
 pub fn sync(
     renderer: &mut Renderer,
     last: &mut OutlineKey,
     scene: &Scene,
     sources: &[DrawSource],
-    highlight: Option<(StructureId, RepId)>,
+    highlight: Option<&Highlight>,
     hover: Option<(StructureId, u32)>,
+    level: SelectLevel,
 ) {
-    let key = OutlineKey::of(scene, sources, highlight, hover);
+    let key = OutlineKey::of(scene, sources, highlight, hover, level);
     if key != *last {
-        renderer.set_selection(item_selections(scene, sources, highlight, hover));
+        renderer.set_selection(item_selections(scene, sources, highlight, hover, level));
         *last = key;
     }
 }
@@ -68,47 +112,72 @@ fn address<T>(map: &Option<Arc<T>>) -> usize {
 fn item_selections(
     scene: &Scene,
     sources: &[DrawSource],
-    highlight: Option<(StructureId, RepId)>,
+    highlight: Option<&Highlight>,
     hover: Option<(StructureId, u32)>,
+    level: SelectLevel,
 ) -> Vec<ItemSelection> {
     let active = scene.active_selection();
     if active.is_none() && highlight.is_none() && hover.is_none() {
         return Vec::new();
     }
+    // Once, not per draw source: a molecule-level pick walks the bond graph.
+    let picked = hover.and_then(|(id, atom)| {
+        let loaded = scene.structure(id)?;
+        Some((id, picked_atoms(loaded, atom, level)))
+    });
     sources
         .iter()
         .map(|source| {
-            let highlighted = highlight == Some((source.id, source.rep));
-            let active = active.filter(|a| a.structure == source.id);
-            let hover_atom = hover.filter(|&(id, _)| id == source.id).map(|(_, a)| a);
-            if active.is_none() && !highlighted && hover_atom.is_none() {
+            let Some(loaded) = scene.structure(source.id) else {
+                return ItemSelection::default();
+            };
+            let marks = Marks {
+                active: active.filter(|a| a.structure == source.id),
+                whole: highlight.is_some_and(|h| h.covers_source(source)),
+                set: highlight.and_then(|h| h.atoms_of(source.id)),
+                hover: picked
+                    .as_ref()
+                    .filter(|(id, _)| *id == source.id)
+                    .map(|(_, mask)| mask),
+            };
+            if marks.is_empty() {
                 return ItemSelection::default();
             }
-            match scene.structure(source.id) {
-                Some(loaded) => item_selection(loaded, active, highlighted, hover_atom, source),
-                None => ItemSelection::default(),
-            }
+            item_selection(loaded, &marks, source)
         })
         .collect()
+}
+
+/// The reasons one structure's atoms are outlined.
+struct Marks<'a> {
+    active: Option<&'a ActiveSelection>,
+    /// Every atom of the source (a hovered rep or structure row).
+    whole: bool,
+    set: Option<&'a Mask>,
+    /// What a click on the hovered atom would pick.
+    hover: Option<&'a FixedBitSet>,
+}
+
+impl Marks<'_> {
+    fn is_empty(&self) -> bool {
+        self.active.is_none() && !self.whole && self.set.is_none() && self.hover.is_none()
+    }
+
+    fn marks(&self, atom: u32) -> bool {
+        let at = atom as usize;
+        self.whole
+            || self.active.is_some_and(|a| a.mask.contains(at))
+            || self.set.is_some_and(|m| m.contains(at))
+            || self.hover.is_some_and(|h| h.contains(at))
+    }
 }
 
 /// A bond counts as selected when both of its atoms are.
 fn item_selection(
     loaded: &LoadedStructure,
-    active: Option<&ActiveSelection>,
-    highlighted: bool,
-    hover_atom: Option<u32>,
+    marks: &Marks<'_>,
     source: &DrawSource,
 ) -> ItemSelection {
-    // Hovering outlines the whole residue, not just the one atom under
-    // the pointer, so it reads as "this is what a click would pick".
-    let hover_range =
-        hover_atom.map(|atom| crate::viewport::residue_atoms(&loaded.structure.topology, atom));
-    let selected = |atom: u32| {
-        highlighted
-            || active.is_some_and(|a| a.mask.contains(atom as usize))
-            || hover_range.as_ref().is_some_and(|r| r.contains(&atom))
-    };
     let atom_count = source
         .atom_map
         .as_ref()
@@ -118,10 +187,10 @@ fn item_selection(
         .as_deref()
         .map_or(loaded.bonds.pairs.as_slice(), |p| p.as_slice());
     ItemSelection {
-        atoms: ItemSelection::bits(atom_count, |i| selected(source.atom(i as u32))),
+        atoms: ItemSelection::bits(atom_count, |i| marks.marks(source.atom(i as u32))),
         bonds: ItemSelection::bits(pairs.len(), |k| {
             let [a, b] = pairs[k];
-            selected(a) && selected(b)
+            marks.marks(a) && marks.marks(b)
         }),
     }
 }
@@ -129,6 +198,7 @@ fn item_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vv_scene::{Command, CommandHistory};
 
     fn source(id: StructureId, rep: RepId) -> DrawSource {
         DrawSource {
@@ -139,32 +209,38 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_highlighted_source_selects_every_atom_regardless_of_the_active_mask() {
-        use vv_scene::{Command, CommandHistory};
+    fn loaded_1ake() -> (Scene, StructureId) {
         let mut scene = Scene::new();
         let mut history = CommandHistory::new(10);
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/small/1AKE.pdb");
         history
-            .dispatch(
-                &mut scene,
-                Command::LoadStructure {
-                    path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../fixtures/small/1CRN.pdb"),
-                },
-            )
+            .dispatch(&mut scene, Command::LoadStructure { path })
             .unwrap();
-        let (id, loaded) = scene.structures().next().unwrap();
-        let rep = loaded.rep().id;
+        let id = scene.structures().next().unwrap().0;
+        (scene, id)
+    }
+
+    fn outlined(picked: &[ItemSelection]) -> u32 {
+        picked[0].atoms.iter().map(|w| w.count_ones()).sum()
+    }
+
+    #[test]
+    fn a_highlighted_source_selects_every_atom_regardless_of_the_active_mask() {
+        let (scene, id) = loaded_1ake();
+        let rep = scene.structure(id).unwrap().rep().id;
         let other_rep = RepId(rep.0 + 1);
         let sources = vec![source(id, rep), source(id, other_rep)];
+        let level = SelectLevel::Atom;
 
         // Nothing selected, nothing highlighted: no work, no sources.
-        assert!(item_selections(&scene, &sources, None, None).is_empty());
+        assert!(item_selections(&scene, &sources, None, None, level).is_empty());
 
         // Highlighting a rep selects its own source fully, and leaves the
         // other rep's source untouched -- distinguished by `DrawSource::rep`,
         // not just the structure id.
-        let picked = item_selections(&scene, &sources, Some((id, rep)), None);
+        let highlight = Highlight::Rep(id, rep);
+        let picked = item_selections(&scene, &sources, Some(&highlight), None, level);
         assert_eq!(picked.len(), 2);
         let atom_count = scene.structure(id).unwrap().structure.atom_count();
         assert_eq!(picked[0].atoms, ItemSelection::bits(atom_count, |_| true));
@@ -176,29 +252,42 @@ mod tests {
     }
 
     #[test]
-    fn hovering_an_atom_outlines_its_whole_residue() {
-        use vv_scene::{Command, CommandHistory};
-        let mut scene = Scene::new();
-        let mut history = CommandHistory::new(10);
-        history
-            .dispatch(
-                &mut scene,
-                Command::LoadStructure {
-                    path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../fixtures/small/1CRN.pdb"),
-                },
-            )
-            .unwrap();
-        let (id, loaded) = scene.structures().next().unwrap();
-        let rep = loaded.rep().id;
-        let sources = vec![source(id, rep)];
-        let residue = crate::viewport::residue_atoms(&loaded.structure.topology, 0);
-        assert!(residue.len() > 1, "fixture needs a multi-atom residue");
+    fn hovering_outlines_what_a_click_would_pick_at_the_level() {
+        let (scene, id) = loaded_1ake();
+        let sources = vec![source(id, scene.structure(id).unwrap().rep().id)];
+        let at = |level| {
+            outlined(&item_selections(
+                &scene,
+                &sources,
+                None,
+                Some((id, 0)),
+                level,
+            ))
+        };
+        let total = scene.structure(id).unwrap().structure.atom_count() as u32;
+        let (atom, residue, chain) = (
+            at(SelectLevel::Atom),
+            at(SelectLevel::Residue),
+            at(SelectLevel::Chain),
+        );
+        assert_eq!(atom, 1);
+        assert!(atom < residue && residue < chain && chain < total);
+    }
 
-        let picked = item_selections(&scene, &sources, None, Some((id, 0)));
-        let expected = ItemSelection::bits(loaded.structure.atom_count(), |i| {
-            residue.contains(&(i as u32))
-        });
-        assert_eq!(picked[0].atoms, expected);
+    #[test]
+    fn structure_and_set_rows_outline_their_atoms() {
+        let (scene, id) = loaded_1ake();
+        let sources = vec![source(id, scene.structure(id).unwrap().rep().id)];
+        let total = scene.structure(id).unwrap().structure.atom_count();
+        let level = SelectLevel::Atom;
+        let row = Highlight::Structure(id);
+        let all = item_selections(&scene, &sources, Some(&row), None, level);
+        assert_eq!(outlined(&all) as usize, total);
+
+        let mut few = FixedBitSet::with_capacity(total);
+        few.insert_range(0..7);
+        let set = Highlight::Atoms(id, Arc::new(few));
+        let some = item_selections(&scene, &sources, Some(&set), None, level);
+        assert_eq!(outlined(&some), 7);
     }
 }

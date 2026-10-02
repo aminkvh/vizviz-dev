@@ -190,6 +190,26 @@ correctly telling e.g. a calcium ion from an alpha carbon even when a
 file's own atom-name column alignment doesn't follow the PDB convention
 precisely.
 
+## Selection commands
+
+These edit the current selection (`select ...` in the console, or the Home tab's Modify and Interface groups). Each is one undo step.
+
+| Command | Does |
+|---|---|
+| `select add EXPR`, `select remove EXPR` | add or take out the atoms EXPR matches |
+| `select invert` | select everything that is not selected |
+| `select expand residue`, `chain`, `molecule` | grow to whole residues, whole chains, or whole molecules (atoms joined by bonds) |
+| `select expand within N` | add everything within N Å of the selection (a shell) |
+| `select grow [N]`, `select shrink [N]` | move each selected run N residues along its chain: grow adds a residue at each end, shrink drops one (whole residues) |
+| `select shrink within N` | peel off atoms within N Å of what is not selected |
+| `select interface A to B [within N]` | residues of A within N Å of B (N defaults to 5) |
+| `select interface A with B [within N]` | the same, plus the residues of B near A |
+| `select interface A [within N]` | residues of A near any other polymer, for example `select interface chain A` |
+
+A and B are ordinary expressions: `select interface chain H to chain A within 4` is an antibody-antigen interface, and `select interface polymer with ligand` is a ligand pocket plus the ligand. These are the same as writing `byres (A and within N of B)` by hand.
+
+`selectmode level residue|chain|molecule` makes clicks and drags in the viewport pick whole residues, chains or molecules, and grows the current selection to match.
+
 ## Not yet
 
 `same residue as`, `around` (exclusive `within`), regular expressions in

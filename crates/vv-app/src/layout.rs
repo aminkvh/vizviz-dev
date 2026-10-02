@@ -102,6 +102,17 @@ pub fn default_layout() -> DockState<Tab> {
     state
 }
 
+/// Folds the leaf holding `tab` to its tab bar, or opens it again.
+pub fn set_collapsed(state: &mut DockState<Tab>, tab: Tab, collapsed: bool) {
+    let tree = state.main_surface_mut();
+    let Some((node, _)) = tree.find_tab(&tab) else {
+        return;
+    };
+    if let egui_dock::Node::Leaf(leaf) = &mut tree[node] {
+        leaf.collapsed = collapsed;
+    }
+}
+
 /// Most of its split the Sequence panel may claim to fit its tracks.
 const SEQUENCE_MAX_FRACTION: f32 = 0.7;
 

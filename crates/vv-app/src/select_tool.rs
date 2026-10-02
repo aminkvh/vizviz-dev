@@ -370,16 +370,52 @@ fn visible_hits(
         .min(loaded.structure.frame_count().saturating_sub(1));
     let coords = loaded.structure.frame(frame);
     let positions = coords.positions();
-    let topology = &loaded.structure.topology;
     let mut hits = atoms_inside(positions, view_proj, size, region);
     hits.intersect_with(&drawn_atoms(loaded, frame));
+    grow_to_level(loaded, &mut hits, level);
+    hits
+}
+
+/// Grows `hits` to the residues, chains or molecules of `level`.
+pub fn grow_to_level(
+    loaded: &vv_scene::LoadedStructure,
+    hits: &mut FixedBitSet,
+    level: SelectLevel,
+) {
     match level {
         SelectLevel::Molecule => {
-            expand_fragments(&mut hits, &loaded.bonds.fragments(positions.len()))
+            expand_fragments(hits, &loaded.bonds.fragments(loaded.structure.atom_count()))
         }
-        _ => expand(&mut hits, topology, level),
+        _ => expand(hits, &loaded.structure.topology, level),
+    }
+}
+
+/// What a click on `atom` picks at `level`, without the hidden conformers.
+pub fn picked_atoms(
+    loaded: &vv_scene::LoadedStructure,
+    atom: u32,
+    level: SelectLevel,
+) -> FixedBitSet {
+    let mut hits = FixedBitSet::with_capacity(loaded.structure.atom_count());
+    hits.insert(atom as usize);
+    grow_to_level(loaded, &mut hits, level);
+    if let Some(shown) = loaded.shown_atoms() {
+        hits.intersect_with(&shown);
     }
     hits
+}
+
+/// How a click or drag combines with the selection: Shift adds, Alt
+/// subtracts (Ctrl subtracts drags too, but a Ctrl click is the measure
+/// chain's).
+pub fn combine_for(modifiers: egui::Modifiers, drag: bool) -> Combine {
+    if modifiers.alt || (drag && modifiers.command) {
+        Combine::Subtract
+    } else if modifiers.shift {
+        Combine::Add
+    } else {
+        Combine::Replace
+    }
 }
 
 impl AppUi<'_> {
@@ -398,6 +434,37 @@ impl AppUi<'_> {
             .max_by_key(|(_, hits)| hits.count_ones(..));
         if let Some((id, hits)) = best {
             self.apply_hits(id, hits, how);
+        }
+    }
+
+    /// A click on `atom` at the tool's level.
+    pub(crate) fn pick_at_level(&mut self, id: StructureId, atom: u32, how: Combine) {
+        let level = self.view.select_tool.level;
+        let Some(loaded) = self.scene.structure(id) else {
+            return;
+        };
+        let hits = picked_atoms(loaded, atom, level);
+        self.apply_hits(id, hits, how);
+    }
+
+    /// Grows the active selection to whole residues, chains or molecules
+    /// when the pick level is raised, so the level and the selection agree.
+    pub(crate) fn snap_selection_to_level(&mut self) {
+        let level = self.view.select_tool.level;
+        let Some(active) = self.scene.active_selection() else {
+            return;
+        };
+        let Some(loaded) = self.scene.structure(active.structure) else {
+            return;
+        };
+        let mut grown = (*active.mask).clone();
+        grow_to_level(loaded, &mut grown, level);
+        if grown != *active.mask {
+            let id = active.structure;
+            self.dispatch(Command::Select {
+                id,
+                mask: std::sync::Arc::new(grown),
+            });
         }
     }
 
@@ -587,6 +654,33 @@ mod tests {
     }
 
     #[test]
+    fn a_chain_pick_takes_the_whole_chain_the_atom_is_in() {
+        use vv_scene::{Command, CommandHistory, Scene};
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/small/1AKE.pdb");
+        let mut scene = Scene::new();
+        let mut history = CommandHistory::new(10);
+        history
+            .dispatch(&mut scene, Command::LoadStructure { path })
+            .unwrap();
+        let loaded = scene.structures().next().unwrap().1;
+        let top = &loaded.structure.topology;
+        let chain = top.chain_of_atom(0);
+        let shown = loaded.shown_atoms().expect("1AKE has conformers");
+        let expected: usize = top.chains[chain as usize]
+            .residues
+            .clone()
+            .flat_map(|r| top.residues[r as usize].atoms.clone())
+            .filter(|&a| shown.contains(a as usize))
+            .count();
+        let picked = picked_atoms(loaded, 0, SelectLevel::Chain);
+        let residue = picked_atoms(loaded, 0, SelectLevel::Residue);
+        assert_eq!(picked.count_ones(..), expected);
+        assert!(picked.count_ones(..) > residue.count_ones(..));
+        assert!(picked.ones().all(|a| top.chain_of_atom(a) == chain));
+    }
+
+    #[test]
     fn a_molecule_is_every_atom_of_a_touched_fragment() {
         let fragments = [0, 0, 1, 1, 1, 2];
         let mut mask = FixedBitSet::with_capacity(6);
@@ -642,6 +736,33 @@ mod tests {
         assert_eq!(classify_press(HOLD_SECS - 0.01, false), ToolPress::Activate);
         assert_eq!(classify_press(HOLD_SECS, false), ToolPress::OpenFlyout);
         assert_eq!(classify_press(0.0, true), ToolPress::OpenFlyout);
+    }
+
+    #[test]
+    fn modifiers_pick_the_combine_mode() {
+        let mods = |shift, alt, command| egui::Modifiers {
+            shift,
+            alt,
+            command,
+            ..Default::default()
+        };
+        assert_eq!(
+            combine_for(mods(false, false, false), false),
+            Combine::Replace
+        );
+        assert_eq!(combine_for(mods(true, false, false), false), Combine::Add);
+        assert_eq!(
+            combine_for(mods(false, true, false), false),
+            Combine::Subtract
+        );
+        assert_eq!(
+            combine_for(mods(false, false, true), false),
+            Combine::Replace
+        );
+        assert_eq!(
+            combine_for(mods(false, false, true), true),
+            Combine::Subtract
+        );
     }
 
     #[test]

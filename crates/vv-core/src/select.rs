@@ -902,7 +902,7 @@ fn range_mask(t: &Topology, field: Field, ranges: &[(i64, i64)]) -> FixedBitSet 
 }
 
 /// Grid over the inner set, then every atom is tested in parallel.
-fn within(t: &Topology, positions: &[Vec3], radius: f32, inner: &FixedBitSet) -> FixedBitSet {
+pub fn within(t: &Topology, positions: &[Vec3], radius: f32, inner: &FixedBitSet) -> FixedBitSet {
     let n = t.atom_count();
     if radius <= 0.0 || inner.is_clear() {
         return inner.clone();
@@ -917,7 +917,8 @@ fn within(t: &Topology, positions: &[Vec3], radius: f32, inner: &FixedBitSet) ->
     atom_mask(n, |i| hits[i])
 }
 
-fn byres(t: &Topology, inner: &FixedBitSet) -> FixedBitSet {
+/// `inner` grown to the whole residues it touches.
+pub fn byres(t: &Topology, inner: &FixedBitSet) -> FixedBitSet {
     let mut hit = vec![false; t.residue_count()];
     for a in inner.ones() {
         hit[t.residue_index[a] as usize] = true;

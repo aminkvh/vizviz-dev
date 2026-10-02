@@ -15,6 +15,7 @@ pub mod command;
 pub mod history;
 pub mod scene;
 pub mod script;
+mod select_ops;
 pub mod selection;
 pub mod session;
 pub mod slotmap;

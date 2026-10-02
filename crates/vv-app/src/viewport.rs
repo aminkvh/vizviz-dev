@@ -8,6 +8,8 @@ use vv_core::glam::Vec3;
 use vv_core::Topology;
 use vv_scene::StructureId;
 
+use crate::select_tool::SelectLevel;
+
 /// Tracks the pointer's last picked pixel so `viewport_ui` only re-picks
 /// (a blocking GPU readback, `Renderer::pick`) when it actually moved,
 /// not on every incidental repaint (trajectory playback, a fading toast,
@@ -49,6 +51,27 @@ pub fn pointer_pixel(pos: egui::Pos2, rect: egui::Rect, width: u32, height: u32)
 pub fn residue_atoms(top: &Topology, atom: u32) -> Range<u32> {
     let r = top.residue_index[atom as usize] as usize;
     top.residues[r].atoms.clone()
+}
+
+/// What the pointer is over, worded for the pick level: the atom, residue
+/// or chain a click there would select.
+pub fn hover_label(top: &Topology, atom: u32, level: SelectLevel) -> String {
+    let r = top.residue_index[atom as usize] as usize;
+    let res = &top.residues[r];
+    let chain = top.chain_name(res.chain as usize);
+    let residue = format!(
+        "{} {} \u{b7} chain {chain}",
+        top.residue_name(r),
+        res.auth_seq_id
+    );
+    match level {
+        SelectLevel::Atom => format!("{} \u{b7} {residue}", top.atom_name(atom as usize)),
+        SelectLevel::Residue | SelectLevel::Molecule => residue,
+        SelectLevel::Chain => {
+            let n = top.chains[res.chain as usize].residues.len();
+            format!("chain {chain} \u{b7} {n} residues")
+        }
+    }
 }
 
 /// A selection expression identifying exactly the residue containing
@@ -175,6 +198,15 @@ mod tests {
         assert_eq!(residue_atoms(&s.topology, 0), 0..2);
         assert_eq!(residue_atoms(&s.topology, 1), 0..2);
         assert_eq!(residue_atoms(&s.topology, 2), 2..3);
+    }
+
+    #[test]
+    fn hover_label_follows_the_pick_level() {
+        let s = fixture();
+        let label = |level| hover_label(&s.topology, 0, level);
+        assert!(label(SelectLevel::Atom).contains("chain A"));
+        assert!(label(SelectLevel::Residue).contains("42 \u{b7} chain A"));
+        assert!(label(SelectLevel::Chain).starts_with("chain A \u{b7} "));
     }
 
     #[test]
