@@ -12,7 +12,9 @@
 //! The test fails on any comparison-set difference not listed in
 //! [`RESIDUAL`], on a listed one that starts to agree, and on any raw
 //! difference outside the antigen, twin and residual groups. It also
-//! requires numbering not to vary from run to run or with thread count.
+//! requires numbering not to vary from run to run or with thread count, and
+//! the reference's loops to take one label pattern per length (listed
+//! exceptions only).
 //!
 //! `cargo test --release -p vv-core --test antibody_reference_exact -- --ignored --nocapture`
 //!
@@ -108,7 +110,11 @@ fn check_loop_exception(recs: &[Record], record: &Record, (lo, hi): (u16, u16)) 
     counts.retain(|p, _| p.len() == mine.len());
     assert!(!counts.contains_key(&mine), "{} is not alone", record.id);
     let usual = counts.values().max().copied().unwrap_or(0);
-    assert!(usual >= 50, "{}: no common pattern at this length", record.id);
+    assert!(
+        usual >= 50,
+        "{}: no common pattern at this length",
+        record.id
+    );
 }
 
 fn check_evidence(recs: &[Record], record: &Record, evidence: Evidence) {
@@ -160,7 +166,12 @@ fn reference_loops_follow_one_pattern_per_length() {
                 BTreeMap::new();
             for r in recs.iter().filter(|r| r.chain == chain && !r.antigen) {
                 let p = loop_pattern(r, lo, hi);
-                by_length.entry(p.len()).or_default().entry(p).or_default().push(r);
+                by_length
+                    .entry(p.len())
+                    .or_default()
+                    .entry(p)
+                    .or_default()
+                    .push(r);
             }
             for (len, patterns) in by_length {
                 let commonest = patterns.values().map(Vec::len).max().expect("a pattern");
