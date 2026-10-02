@@ -60,7 +60,10 @@ pub fn one_letter(name: &str) -> char {
     AA.iter().find(|(n, _)| *n == name).map_or('X', |(_, c)| *c)
 }
 
-/// Polymer chains of a PDB file from their CA atoms (first altloc only).
+/// Polymer chains of a PDB file, one residue per distinct residue label
+/// (first altloc only). Any atom counts: the reference numbers residues
+/// built without a CA (4XCF H99 has only C and O), so a CA-only read
+/// would drop them and shift every label after.
 pub fn read_chains(path: &Path) -> Vec<Chain> {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let mut chains: BTreeMap<char, Vec<Residue>> = BTreeMap::new();
@@ -68,9 +71,9 @@ pub fn read_chains(path: &Path) -> Vec<Chain> {
         .lines()
         .filter(|l| l.len() > 26 && (l.starts_with("ATOM") || l.starts_with("HETATM")))
     {
-        let (name, res) = (&line[12..16], &line[17..20]);
+        let res = &line[17..20];
         let hetero_ok = !line.starts_with("HETATM") || matches!(res, "MSE" | "PCA");
-        if name != " CA " || !hetero_ok || !matches!(line.as_bytes()[16], b' ' | b'A') {
+        if !hetero_ok || !matches!(line.as_bytes()[16], b' ' | b'A') {
             continue;
         }
         let number: u16 = line[22..26].trim().parse().unwrap_or(0);
