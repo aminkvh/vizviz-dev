@@ -6,9 +6,9 @@ use std::sync::OnceLock;
 
 use rayon::prelude::*;
 
-use super::{find_domains, CdrDefinition, ChainType, Domain};
+use super::{find_domains, find_domains_in_chain, CdrDefinition, ChainType, Domain};
 use crate::residue_class::ResidueClass;
-use crate::seqfeat::one_letter;
+use crate::seqfeat::protein_letter as name_letter;
 use crate::Topology;
 
 /// A residue inside a CDR.
@@ -23,18 +23,41 @@ pub struct CdrResidue {
 fn protein_letter(top: &Topology, residue: u32) -> char {
     let residue = residue as usize;
     match top.residue_class(residue) {
-        ResidueClass::Protein => one_letter(top.residue_name(residue))
-            .filter(char::is_ascii_uppercase)
-            .unwrap_or('X'),
+        ResidueClass::Protein => name_letter(top.residue_name(residue)),
         _ => 'X',
     }
 }
 
 /// Variable domains in the protein residues `residues`; `start` and `end`
-/// of each are offsets from `residues.start`.
+/// of each are offsets from `residues.start`. Numbered from the chain's
+/// deposited sequence when the file states one.
 pub fn find_in_residues(top: &Topology, residues: Range<u32>) -> Vec<Domain> {
-    let seq: String = residues.map(|r| protein_letter(top, r)).collect();
-    find_domains(&seq)
+    match deposited(top, &residues) {
+        Some(full) => find_against(top, residues, full),
+        None => {
+            let seq: String = residues.map(|r| protein_letter(top, r)).collect();
+            find_domains(&seq)
+        }
+    }
+}
+
+/// The deposited sequence of the chain record holding `residues`.
+fn deposited<'a>(top: &'a Topology, residues: &Range<u32>) -> Option<&'a str> {
+    let first = top.residues.get(residues.start as usize)?;
+    let full = top.full_sequence.get(first.chain as usize)?;
+    (!full.is_empty()).then_some(full.as_str())
+}
+
+fn find_against(top: &Topology, residues: Range<u32>, full: &str) -> Vec<Domain> {
+    let rows: Vec<u32> = residues
+        .clone()
+        .filter(|&r| top.residue_class(r as usize) == ResidueClass::Protein)
+        .collect();
+    let observed: String = rows.iter().map(|&r| protein_letter(top, r)).collect();
+    find_domains_in_chain(full, &observed)
+        .into_iter()
+        .map(|d| d.reindexed(|i| (rows[i] - residues.start) as usize))
+        .collect()
 }
 
 /// Variable domains of every chain of a [`Topology`], found on first use.

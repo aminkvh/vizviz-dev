@@ -103,6 +103,11 @@ pub struct Topology {
     /// (mmCIF entity tables, PDB `SEQRES`); empty when it says nothing.
     /// Overrides the name tables in `assign_residue_classes`.
     pub polymer_hint: Vec<PolymerHint>,
+    /// One-letter deposited sequence of each chain record (`X` for a
+    /// residue without a letter), `""` when the file states none; empty
+    /// when it states none for any chain. Set by the reader after the
+    /// chains are final.
+    pub full_sequence: Vec<String>,
     pub names: Interner,
     pub explicit_bonds: Vec<ExplicitBond>,
     /// Non-`Single` bond orders the file itself named by atom (mmCIF
@@ -304,12 +309,17 @@ impl Topology {
                 });
             }
         }
-        if !self.segids.is_empty() && self.segids.len() != self.chains.len() {
-            return Err(TopologyError::ColumnLength {
-                column: "segids",
-                expected: self.chains.len(),
-                actual: self.segids.len(),
-            });
+        for (column, len) in [
+            ("segids", self.segids.len()),
+            ("full_sequence", self.full_sequence.len()),
+        ] {
+            if len != 0 && len != self.chains.len() {
+                return Err(TopologyError::ColumnLength {
+                    column,
+                    expected: self.chains.len(),
+                    actual: len,
+                });
+            }
         }
         if let Some((a, _)) = self.long_names.iter().find(|(a, _)| *a as usize >= atoms) {
             return Err(TopologyError::LongNameAtom { atom: *a, atoms });

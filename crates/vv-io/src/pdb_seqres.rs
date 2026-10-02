@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use vv_core::residue_class::{is_standard_polymer, of_name};
+use vv_core::seqfeat::protein_letter;
 use vv_core::{flags, PolymerHint, ResidueClass, Topology};
 
 use crate::polymer_layout::{sequence, Layout};
@@ -13,20 +14,47 @@ use crate::polymer_layout::{sequence, Layout};
 #[derive(Default)]
 pub(crate) struct Seqres {
     chains: HashMap<String, HashSet<String>>,
+    order: HashMap<String, Vec<String>>,
 }
 
 impl Seqres {
     pub(crate) fn record(&mut self, line: &[u8]) {
         let Some(&chain) = line.get(11) else { return };
-        let names = self.chains.entry((chain as char).to_string()).or_default();
+        let chain = (chain as char).to_string();
+        let names = self.chains.entry(chain.clone()).or_default();
+        let order = self.order.entry(chain).or_default();
         let mut col = 19;
         while col + 3 <= line.len() {
             let name = String::from_utf8_lossy(&line[col..col + 3]);
             let name = name.trim();
             if !name.is_empty() {
                 names.insert(name.to_string());
+                order.push(name.to_string());
             }
             col += 4;
+        }
+    }
+
+    /// The one-letter sequence of each chain record whose `SEQRES` is a
+    /// protein, `""` for the others; empty when there is none.
+    pub(crate) fn sequences(&self, topology: &Topology) -> Vec<String> {
+        let sequences: Vec<String> = topology
+            .chains
+            .iter()
+            .map(|chain| {
+                let id = topology.names.get(chain.label_asym);
+                match self.chains.get(id).map(chain_kind) {
+                    Some(PolymerHint::Protein) => self.order[id]
+                        .iter()
+                        .map(|n| protein_letter(n))
+                        .collect(),
+                    _ => String::new(),
+                }
+            })
+            .collect();
+        match sequences.iter().any(|s| !s.is_empty()) {
+            true => sequences,
+            false => Vec::new(),
         }
     }
 

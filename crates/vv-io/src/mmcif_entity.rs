@@ -28,6 +28,8 @@ enum EntityKind {
 pub(crate) struct EntityInfo {
     entities: HashMap<u16, EntityKind>,
     comp_hint: HashMap<String, PolymerHint>,
+    /// Canonical one-letter sequence of each protein entity.
+    sequences: HashMap<u16, String>,
 }
 
 /// `_entity_poly.type` -> what the polymer is made of.
@@ -83,7 +85,13 @@ impl EntityInfo {
                 else {
                     continue;
                 };
-                info.entities.insert(id, polymer_kind(t));
+                let kind = polymer_kind(t);
+                info.entities.insert(id, kind);
+                let code = poly.get_str(row, "pdbx_seq_one_letter_code_can");
+                if let (EntityKind::Protein, Some(code)) = (kind, code) {
+                    let letters = code.chars().filter(|c| c.is_ascii_alphabetic());
+                    info.sequences.insert(id, letters.collect());
+                }
             }
         }
         if let Some(comp) = cats.get("chem_comp") {
@@ -105,6 +113,19 @@ impl EntityInfo {
             Some(EntityKind::Water) => PolymerHint::Water,
             None => PolymerHint::Unknown,
         }
+    }
+
+    /// The deposited sequence of each chain record's entity, or empty when
+    /// the file gives none.
+    pub(crate) fn full_sequences(&self, topology: &Topology) -> Vec<String> {
+        if self.sequences.is_empty() {
+            return Vec::new();
+        }
+        topology
+            .chains
+            .iter()
+            .map(|chain| self.sequences.get(&chain.entity).cloned().unwrap_or_default())
+            .collect()
     }
 
     /// One hint per residue, or empty when the file has no entity table.

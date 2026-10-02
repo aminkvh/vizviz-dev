@@ -35,6 +35,13 @@ pub fn one_letter(name: &str) -> Option<char> {
     })
 }
 
+/// Upper-case amino-acid letter of a residue name, `X` for anything else.
+pub fn protein_letter(name: &str) -> char {
+    one_letter(name)
+        .filter(char::is_ascii_uppercase)
+        .unwrap_or('X')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

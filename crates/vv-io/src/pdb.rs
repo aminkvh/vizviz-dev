@@ -691,6 +691,7 @@ pub fn parse(src: &[u8]) -> Result<Structure, ParseError> {
     let atom_count = builder.atom_count();
     let topology = &mut builder.topology;
     topology.polymer_hint = seqres.hints(topology);
+    topology.full_sequence = seqres.sequences(topology);
     topology.annotations = header.into_annotations(&title);
     topology.title = title;
     topology.id = id;

@@ -269,6 +269,7 @@ pub(crate) fn assemble(
         .map(|(_, v)| v)
         .collect();
     builder.topology.polymer_hint = entity.hints(&builder.topology);
+    builder.topology.full_sequence = entity.full_sequences(&builder.topology);
     builder.finish_with_frames(extra).map_err(ParseError::from)
 }
 

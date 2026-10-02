@@ -12,6 +12,7 @@ mod align;
 mod cdr;
 mod consensus;
 pub mod external;
+mod full;
 mod numbering;
 mod placement;
 mod profile;
@@ -20,6 +21,7 @@ mod tcr_seeds;
 mod topology;
 
 pub use cdr::{CdrDefinition, Region};
+pub use full::find_domains_in_chain;
 pub use numbering::{Label, Scheme};
 pub use topology::{cdr_residues, chain_domains, find_in_residues, AntibodyCache, CdrResidue};
 
@@ -85,6 +87,9 @@ pub struct Domain {
     /// Score relative to a perfect framework match, `0..=1`.
     pub confidence: f32,
     imgt: Vec<Label>,
+    /// Index into the caller's sequence of each domain position, `None`
+    /// where the position is not in that sequence (an unmodelled residue).
+    at: Vec<Option<usize>>,
     /// Residues of the domain as profile alphabet indices.
     residues: Vec<u8>,
     /// False for a lambda V domain joined to a kappa-type J segment.
@@ -114,7 +119,11 @@ impl Domain {
     /// `.2`, ... (`112A` is IMGT 112.1). T-cell receptor domains are
     /// numbered in IMGT whatever `scheme` says.
     pub fn numbering(&self, scheme: Scheme) -> Vec<(usize, Label)> {
-        (self.start..self.end).zip(self.labels(scheme)).collect()
+        self.at
+            .iter()
+            .zip(self.labels(scheme))
+            .filter_map(|(at, label)| Some((at.as_ref().copied()?, label)))
+            .collect()
     }
 
     /// The rules' labeling, then moved to the best placement under the
@@ -135,13 +144,16 @@ impl Domain {
         let native = self.labels(definition.native_scheme());
         let regions = definition.regions(self.chain, &native);
         let shown = self.labels(scheme);
-        (self.start..self.end)
+        self.at
+            .iter()
             .zip(shown)
             .zip(regions)
-            .map(|((index, label), region)| Annotation {
-                index,
-                label,
-                region,
+            .filter_map(|((at, label), region)| {
+                Some(Annotation {
+                    index: (*at)?,
+                    label,
+                    region,
+                })
             })
             .collect()
     }
@@ -258,6 +270,7 @@ fn scan(q: &[u8], lo: usize, hi: usize, min_confidence: f32, out: &mut Vec<Domai
         score: hit.score,
         confidence,
         imgt: numbering::imgt_labels(&slots, &profile.labels),
+        at: (start..end).map(Some).collect(),
         residues: q[start..end].to_vec(),
         lambda_j: !kappa_type_j(&q[from..to], &hit.slots, &profile.labels),
     });

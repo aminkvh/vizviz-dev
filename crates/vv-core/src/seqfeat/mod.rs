@@ -15,7 +15,7 @@ pub mod sasa;
 
 pub use conservation::{conservation, Column, Conservation};
 pub use contacts::{residue_contacts, ResidueContact};
-pub use letters::one_letter;
+pub use letters::{one_letter, protein_letter};
 pub use links::{disulfides, glycosylated, Glycosylation};
 pub use missing::{unobserved, unobserved_in_entity, EntityChain, Gap, Unobserved};
 pub use motifs::{liabilities, sequons, Hit, Liability, Sequon, SequonKind};
