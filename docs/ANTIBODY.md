@@ -340,15 +340,37 @@ antibody_reference -- --ignored --nocapture` prints the same counts):
 
 | | Domains | Identical before | Identical now | Residues now |
 |---|---|---|---|---|
-| Kabat | 3,625 | 3,490 (96.3%) | 3,602 (99.4%) | 99.87% |
-| Chothia | 3,617 | 3,481 (96.2%) | 3,593 (99.3%) | 99.87% |
-| Martin | 3,605 | 3,539 (98.2%) | 3,582 (99.4%) | 99.87% |
+| Kabat | 3,625 | 3,490 (96.3%) | 3,604 (99.4%) | 99.87% |
+| Chothia | 3,617 | 3,481 (96.2%) | 3,595 (99.4%) | 99.87% |
+| Martin | 3,605 | 3,539 (98.2%) | 3,585 (99.4%) | 99.87% |
 
-Split by sorted PDB id (even and odd positions), identical before and now:
-Kabat 1,734 to 1,782 of 1,791 and 1,756 to 1,820 of 1,834; Chothia 1,745
-to 1,787 of 1,800 and 1,736 to 1,806 of 1,817; Martin 1,756 to 1,775 of
-1,787 and 1,783 to 1,807 of 1,818. The rules were found by reading the
-whole set, not one half; the gain is in both halves.
+Three sets are reported (`antibody_reference_exact.rs`). The **raw** set is
+the table above. The **comparison set** drops what the reference itself did
+not scheme-number or numbered inconsistently: the chains its `REMARK 950`
+lines type `A` (antigen; deposited numbers kept) and every copy of a domain
+that it numbers differently from an identical one (same chain sequence and
+domain sequence, different labels; the majority numbering is kept, and with
+no majority all copies go). The reference files carry only renumbered
+labels, so "identical" means identical sequence, not identical deposited
+numbers. 14 chains are typed antigen; the one inconsistent pair is 4XCF_1:H
+and 4XAW_1:H (same 122-residue chain, H3 labelled from 100 in one and from 99
+in the other, one copy each, so both go). Both halves split the sorted
+non-seed PDB ids of the three bundles together, even index and odd index.
+
+| | Raw | Comparison | Comparison, even half | Comparison, odd half |
+|---|---|---|---|---|
+| Kabat, before | 3,602 / 3,625 | 3,595 / 3,609 | 1,809 / 1,818 | 1,786 / 1,791 |
+| Kabat, now | 3,604 / 3,625 | 3,597 / 3,609 | 1,810 / 1,818 | 1,787 / 1,791 |
+| Chothia, before | 3,593 / 3,617 | 3,587 / 3,601 | 1,807 / 1,816 | 1,780 / 1,785 |
+| Chothia, now | 3,595 / 3,617 | 3,589 / 3,601 | 1,808 / 1,816 | 1,781 / 1,785 |
+| Martin, before | 3,582 / 3,605 | 3,577 / 3,589 | 1,801 / 1,808 | 1,776 / 1,781 |
+| Martin, now | 3,585 / 3,605 | 3,580 / 3,589 | 1,803 / 1,808 | 1,777 / 1,781 |
+
+The comparison set is not at 100%: 12 domains (Kabat, Chothia) or 9
+(Martin) remain, listed in `RESIDUAL` of the exact test, which fails on any
+other difference and on a listed one that starts to agree. The held-out
+depositor report did not move (99.58% of residues, Kabat/Chothia-framed
+domains, heavy 47 of 61 whole-domain identical).
 
 Mismatching domains before and how many agree now, by the region of the
 first difference (Kabat; Chothia within one domain of it):
@@ -367,51 +389,69 @@ first difference (Kabat; Chothia within one domain of it):
 | L1, H3 | 3, 0 | 4, 0 | |
 | Total | 135, 104 | 66, 39 | |
 
-The remaining 23 (Kabat), 24 (Chothia) and 23 (Martin) domains are listed
-in `EXCEPTIONS` of `antibody_reference_exact.rs`, which fails on any other
-difference and on a listed domain that starts to agree. Each is one of:
+### Placement by consensus
 
-**Antigen chains (10).** The reference never numbers a chain that its
-`REMARK 950 CHAIN` line types `A`; it keeps the deposited numbers. Eight
-are antibodies in the role of antigen (idiotype and anti-idiotype
-complexes): 1CIC_1:B, 1CIC_2:D, 1DVF_1:B, 1IAI_2:I, 1IAI_2:M, 5XAJ_2:D,
-5XAJ_2:F, 5WOB_4:Q (all schemes), and 4K7P_2:X (Chothia, Martin) and
-4K7P_2:Y (Martin), whose deposited numbers happen to equal Kabat's. The
-test checks the type letter for each. Nothing in a structure file says
-which antibody is the antigen, and numbering it is the useful answer, so
-these stay.
+The rules above fix one labeling per domain. The domains still wrong were
+all framework indel *placements* among near-equivalent alternatives, so a
+placement step (`placement.rs`) lets alternatives compete on similarity to a
+consensus of the reference numbering itself.
 
-**Inconsistent within the reference (1).** 4XCF_1:H and 4XAW_1:H have the
-same 122-residue domain, and the same deposited numbers (`CDR3` from
-100D), yet the reference labels 4XCF_1:H's H3 from 100 and 4XAW_1:H's
-from 99.
+**Consensus.** Per scheme and label, residue counts over the heavy chains of
+the even half of the comparison set (`consensus.rs`, written by
+`tests/antibody_consensus_gen.rs`; labels 36-49 and 57-92 with their
+letters). A residue at a label scores log2 of its frequency there, with
+background-weighted pseudocounts (weight 5), over its background frequency;
+labels without data score zero. Light chains and other labels have no table.
 
-**Explained up to a residue-level choice (2).** 5CEY_1:L (all schemes) and
-6NNJ_1:L (Kabat, Chothia) start `YVRPLSVA`: the reference labels them 4, 5,
-6, 7, where the start-at-5 rule gives 5 to 8. 5CEY_2:L has the same eight
-residues after one more, and starts at 5, as the rule says. The reference
-looks to place the start by which residue fits the germline P at 7, a
-choice our aligner makes differently for the same length (4R26_1:L,
-`YVSPLSVA`, starts at 5 in both).
+**Candidates and prices.** Candidates are labelings around the rule's. Each
+label used or skipped unlike the rule costs bits, and so does each insertion
+letter more or fewer; a candidate must beat the rule by more than float noise,
+so the rule is the tie-break. Two places are open, everywhere else the price
+is prohibitive: FR2 (36-49), where the block of skipped labels may slide
+(4 bits per label changed, one contiguous block so the residues keep their
+order), and the CDR-H2 tail to FR3 (50-92), a dynamic program over labels 50-65
+skippable at 30 bits and letters at the H2 and FR3 sites movable at 8 bits per
+letter (at most 6 above the rule's count).
 
-**Open (12, no twin in the set, no rule found).** Heavy FR2 with two or
-three residues missing (1MFE_1:H, 4LLV_3:H): the reference keeps the Gly at
-44 and deletes 42-43 (and 41), where 1MEX_1:H, with the same `PGLEW` and
-no deposited gap, is numbered P41, G42 and 43-44 deleted; whether the
-missing residues are disordered ones (1MFE_1:H's deposited numbers jump
-from 291 to 294) or a real deletion does not decide it, since 1MEX's own
-numbers put its Gly at 44. Kappa FR3 with missing residues (3UTZ_1:L,
-4LLV_3:L, 5EOC_2:L, 5VTA_2:L, 6BPC_1:L): the gap lies one to three
-positions from where the residues fit best (3UTZ_1:L deletes 66 from
-`S65 G66 S67 G68` with a residue missing, where deleting 67 matches all
-three neighbours). Starts (1OAY_2:L, 3GK8_1:H): 3GK8_1:H begins
-`AVHLQGTELVKP`, the reference numbers the first six 3, 4, 5, 6, 6A, 6B,
-and the deposited numbers and any residue match say 1 to 6. And three
-boundaries (1QFW_1:H FR3 start, 1QFW_1:L L1 letters, 4YDL_1:H, which has
-five insertions at 82 that our aligner spends in CDR-H2).
+**How it was chosen.** A first version opened every label and letter under one
+price. At every price either it lost whole domains (the reference keeps the
+rules' gap site in FR3, FR1 and FR4 whatever the sequence says: tens to
+hundreds more errors) or fixed nothing; where it fixed a domain the free optimum often was
+not the reference's. Opening only FR2 and the H2/FR3 boundary and shutting the
+rest gave no loss at 4 bits per label in FR2 (2 lost three domains), 20 to 50 in
+the tail, and the same result with the letter price from 4 to 8; the pseudocount weight was the one setting
+that mattered (1 to 5 fixed the Martin boundary case, 10 did not; 30 fixed
+nothing), taken from the middle of the plateau. Lambda FR1 start placements were
+tried as a third family (leading run plus one block); it either lost kappa and
+lambda stubs or left the three lambda cases unchanged and was dropped.
 
-They are not shown to be irreducible, and the twin test does not apply to
-them, so the claim here is 99.3% to 99.4% of domains, not 100%.
+**Result.** Fixed: 4LLV_3:H (FR2 block, G at 44) and 1QFW_1:H (H2 tail: 65
+skipped, Lys at 66) in all three schemes, and 4YDL_1:H in Martin.
+The even half gained 4LLV_3:H (all schemes) and 4YDL_1:H (Martin), the odd half
+1QFW_1:H; the consensus comes from the even half only, so the odd half's gain
+is validation. No domain that agreed before disagrees now.
+
+**Residual domains.** `VIZVIZ_EVIDENCE=1` prints, for each one, the rule's,
+our and the reference's labels over the differing stretch and every placement
+of its residues onto the base labels between the stretch's ends, scored by the
+even-half consensus (bits). In every enumerated case the reference's labeling
+is among the placements; the question is where it ranks.
+
+| Domain | Site | Reference rank among placements | Consensus |
+|---|---|---|---|
+| 1MFE_1:H | FR2 | 2 of 3 (3.4 vs 3.5 bits) | A tie: the same `PGLEW` window is G42 in 1MEX_1:H and G44 here, so no residue score can separate them |
+| 4LLV_3:L | kappa FR3 | 2 of 10 (11.0 vs 11.1) | A tie |
+| 3UTZ_1:L, 5EOC_2:L, 5VTA_2:L, 6BPC_1:L | kappa FR3 | 2 of 2, 2 of 2, 2 of 3, 3 of 3 | The consensus prefers the rule by 4 to 14 bits; the reference's gap lies elsewhere |
+| 5CEY_1:L, 6NNJ_1:L | lambda start | 1 of 5 (-4.8 vs -12.5; Martin 5CEY by 0.1 bit) | The reference placement is the best, but a start family cannot be opened without losing other lambda stubs (see above); 5CEY_2:L, same residues plus one, starts at 5 |
+| 1OAY_2:L | lambda start | 9 of 36 (6.4 vs 14.2 best) | Not the consensus optimum |
+| 3GK8_1:H | heavy start (`AVHLQG` numbered 3-6, 6A, 6B) | letters, not enumerated; -10.3 vs 0.5 | The consensus prefers the rule |
+| 1QFW_1:L | L1 letters | letters, not enumerated; -8.6 vs -1.3 | The consensus prefers the rule |
+| 4YDL_1:H (Kabat, Chothia) | H2/FR3 boundary | letters; reference -18.5, ours -16.8, rule -86.5 | The reference moves 4 letters to 82A-E; the best placement in the window stops at 82A-C because the data have one 82D and one 82E; fixed in Martin |
+
+None of these is shown to be impossible; they are the cases a position-wise
+consensus cannot decide. Conclusion for the comparison set: 99.67% (Kabat,
+3,597 of 3,609), 99.67% (Chothia, 3,589 of 3,601), 99.75% (Martin, 3,580 of
+3,589).
 
 **What the stubs show.** Residues in front of our domain were the largest
 single cause in the previous round, and they show that the reference does

@@ -10,8 +10,10 @@
 mod aho;
 mod align;
 mod cdr;
+mod consensus;
 pub mod external;
 mod numbering;
+mod placement;
 mod profile;
 mod seeds;
 mod tcr_seeds;
@@ -83,6 +85,8 @@ pub struct Domain {
     /// Score relative to a perfect framework match, `0..=1`.
     pub confidence: f32,
     imgt: Vec<Label>,
+    /// Residues of the domain as profile alphabet indices.
+    residues: Vec<u8>,
     /// False for a lambda V domain joined to a kappa-type J segment.
     lambda_j: bool,
 }
@@ -110,20 +114,27 @@ impl Domain {
     /// `.2`, ... (`112A` is IMGT 112.1). T-cell receptor domains are
     /// numbered in IMGT whatever `scheme` says.
     pub fn numbering(&self, scheme: Scheme) -> Vec<(usize, Label)> {
-        let labels = numbering::relabel(scheme, self.chain, &self.imgt, self.lambda_j);
-        (self.start..self.end).zip(labels).collect()
+        (self.start..self.end).zip(self.labels(scheme)).collect()
+    }
+
+    /// The rules' labeling, then moved to the best placement under the
+    /// scheme's consensus.
+    fn labels(&self, scheme: Scheme) -> Vec<Label> {
+        placement::refine(scheme, self.chain, &self.residues, self.rule_labels(scheme))
+    }
+
+    /// The label rules' numbering before placement by consensus, for
+    /// measuring what placement changes.
+    #[doc(hidden)]
+    pub fn rule_labels(&self, scheme: Scheme) -> Vec<Label> {
+        numbering::relabel(scheme, self.chain, &self.imgt, self.lambda_j)
     }
 
     /// Label in `scheme` and region under `definition` for each residue.
     pub fn annotate(&self, scheme: Scheme, definition: CdrDefinition) -> Vec<Annotation> {
-        let native = numbering::relabel(
-            definition.native_scheme(),
-            self.chain,
-            &self.imgt,
-            self.lambda_j,
-        );
+        let native = self.labels(definition.native_scheme());
         let regions = definition.regions(self.chain, &native);
-        let shown = numbering::relabel(scheme, self.chain, &self.imgt, self.lambda_j);
+        let shown = self.labels(scheme);
         (self.start..self.end)
             .zip(shown)
             .zip(regions)
@@ -247,6 +258,7 @@ fn scan(q: &[u8], lo: usize, hi: usize, min_confidence: f32, out: &mut Vec<Domai
         score: hit.score,
         confidence,
         imgt: numbering::imgt_labels(&slots, &profile.labels),
+        residues: q[start..end].to_vec(),
         lambda_j: !kappa_type_j(&q[from..to], &hit.slots, &profile.labels),
     });
     scan(q, lo, start, min_confidence, out);

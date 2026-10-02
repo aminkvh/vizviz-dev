@@ -366,6 +366,20 @@ fn lambda_fr4(lambda_j: bool) -> Vec<Span> {
     }
 }
 
+/// Base labels after which `scheme` lets residues be inserted, ascending.
+pub(super) fn insertion_sites(scheme: Scheme, chain: ChainType) -> Vec<u16> {
+    let mut sites: Vec<u16> = spans(scheme, chain, true)
+        .iter()
+        .filter_map(|s| match s {
+            Span::Var { ins_after, .. } if *ins_after > 0 => Some(*ins_after),
+            _ => None,
+        })
+        .collect();
+    sites.sort_unstable();
+    sites.dedup();
+    sites
+}
+
 fn spans(scheme: Scheme, chain: ChainType, lambda_j: bool) -> Vec<Span> {
     match chain {
         ChainType::Heavy => heavy_spans(scheme),

@@ -164,7 +164,7 @@ pub(super) fn aa_index(b: u8) -> usize {
 }
 
 /// Robinson & Robinson (1991) background frequencies, in `AA` order.
-const BACKGROUND: [f32; 20] = [
+pub(super) const BACKGROUND: [f32; 20] = [
     0.078, 0.051, 0.045, 0.054, 0.019, 0.043, 0.063, 0.074, 0.022, 0.051, 0.091, 0.057, 0.022,
     0.039, 0.052, 0.071, 0.058, 0.013, 0.032, 0.064,
 ];
