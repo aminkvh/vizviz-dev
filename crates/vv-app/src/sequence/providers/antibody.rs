@@ -6,7 +6,6 @@ use vv_core::antibody::external::ExternalDomain;
 use vv_core::antibody::{find_in_residues, Annotation, ChainType, Domain, Region};
 
 use super::hex;
-use crate::sequence::anarci::Backend;
 use crate::sequence::tracks::{
     legend, AntibodySettings, External, Glyph, Inputs, TrackContext, TrackData, TrackProvider,
 };
@@ -53,7 +52,7 @@ impl Painted {
         }
     }
 
-    /// `None` when ANARCI was not run for the scheme or definition.
+    /// `None` when the program was not run for the scheme or definition.
     fn external(domain: &ExternalDomain, s: AntibodySettings) -> Option<Self> {
         Some(Self {
             chain: domain.chain,
@@ -89,13 +88,14 @@ fn paint_domain(track: &mut TrackData, domain: &Painted, first: u32, s: Antibody
     track.set_badge(first + domain.start as u32, domain.chain.name());
 }
 
-/// Domains per chain row: ANARCI's when it is selected and has answered,
-/// native otherwise (the track stays empty only while ANARCI runs).
+/// Domains per chain row: the external program's when its backend serves
+/// the settings and has answered, native otherwise (the track stays empty
+/// only while the program runs).
 fn painted_domains(ctx: &TrackContext) -> Vec<(u32, Vec<Painted>)> {
     let s = ctx.antibody;
-    match (s.backend, ctx.extras.anarci) {
-        (Backend::Anarci, External::Pending) => Vec::new(),
-        (Backend::Anarci, External::Done(Ok(chains))) => ctx
+    match (s.backend.serves(s), ctx.extras.anarci) {
+        (true, External::Pending) => Vec::new(),
+        (true, External::Done(Ok(chains))) => ctx
             .rows
             .iter()
             .zip(chains)

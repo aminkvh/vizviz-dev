@@ -97,6 +97,17 @@ mod tests {
     }
 
     #[test]
+    fn the_abnum_choice_round_trips_and_is_never_the_default() {
+        let mut state = SequenceState::default();
+        assert_eq!(state.antibody.backend, Backend::Native);
+        state.antibody.backend = Backend::Abnum;
+        let text = serde_json::to_string(&state.snapshot()).unwrap();
+        let mut back = SequenceState::default();
+        back.restore(&serde_json::from_str(&text).unwrap());
+        assert_eq!(back.antibody.backend, Backend::Abnum);
+    }
+
+    #[test]
     fn a_session_without_a_backend_keeps_native() {
         let mut state = SequenceState::default();
         state.restore(&json!({"antibody": {"scheme": "IMGT", "backend": "bogus"}}));

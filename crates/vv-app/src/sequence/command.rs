@@ -126,7 +126,7 @@ impl AppUi<'_> {
             }
             _ => {
                 return Err(
-                    "expected `sequence antibody [scheme NAME | cdr NAME | backend native|anarci | exe PATH]`"
+                    "expected `sequence antibody [scheme NAME | cdr NAME | backend native|anarci|abnum | exe PATH]`"
                         .into(),
                 )
             }

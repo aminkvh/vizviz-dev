@@ -17,23 +17,53 @@ use vv_core::residue_class::ResidueClass;
 use vv_core::seqfeat::one_letter;
 use vv_core::Topology;
 
+use super::tracks::AntibodySettings;
 use launch::Launcher;
 
 /// Where the antibody track gets its numbers.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Backend {
     #[default]
     Native,
     Anarci,
+    /// The scheme authors' public web service (`abnum.rs`).
+    Abnum,
 }
 
 impl Backend {
-    pub const ALL: [Backend; 2] = [Backend::Native, Backend::Anarci];
+    pub const ALL: [Backend; 3] = [Backend::Native, Backend::Anarci, Backend::Abnum];
 
     pub fn name(self) -> &'static str {
         match self {
             Backend::Native => "native",
             Backend::Anarci => "ANARCI",
+            Backend::Abnum => "Abnum",
+        }
+    }
+
+    /// The name as the header menu shows it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Backend::Abnum => "Abnum (web)",
+            other => other.name(),
+        }
+    }
+
+    /// Whether this backend numbers under `settings`; native numbering
+    /// stands in where it does not.
+    pub fn serves(self, settings: AntibodySettings) -> bool {
+        self != Backend::Native && self.missing(settings).is_none()
+    }
+
+    /// The scheme `settings` needs that this backend lacks: Abnum has no
+    /// IMGT or AHo, and the CDR definition reads labels in its own scheme.
+    pub fn missing(self, settings: AntibodySettings) -> Option<Scheme> {
+        let wanted = [settings.scheme, settings.cdr.native_scheme()];
+        match self {
+            Backend::Abnum => wanted
+                .into_iter()
+                .find(|s| vv_core::antibody::abnum::flag(*s).is_none()),
+            _ => None,
         }
     }
 
@@ -49,11 +79,14 @@ impl Backend {
 pub enum Error {
     NotFound,
     Failed(String),
+    /// The Abnum server did not answer.
+    Unreachable,
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Error::Unreachable => write!(f, "Abnum unreachable"),
             Error::NotFound => write!(f, "ANARCI not found: install it or set {ENV_VAR}"),
             Error::Failed(why) => write!(f, "ANARCI failed: {why}"),
         }
@@ -164,6 +197,8 @@ mod tests {
     use super::*;
     use vv_core::antibody::{CdrDefinition, ChainType};
 
+    use crate::sequence::tracks::AntibodySettings;
+
     const IMGT: &str = include_str!("../../../../vv-core/tests/data/anarci_imgt.txt");
     const KABAT: &str = include_str!("../../../../vv-core/tests/data/anarci_kabat.txt");
 
@@ -239,11 +274,28 @@ mod tests {
     }
 
     #[test]
+    fn abnum_serves_only_the_schemes_it_offers() {
+        let with = |scheme, cdr| AntibodySettings {
+            scheme,
+            cdr,
+            backend: Backend::Abnum,
+        };
+        assert!(Backend::Abnum.serves(with(Scheme::Martin, CdrDefinition::North)));
+        let imgt = with(Scheme::Imgt, CdrDefinition::Kabat);
+        assert_eq!(Backend::Abnum.missing(imgt), Some(Scheme::Imgt));
+        let imgt_cdr = with(Scheme::Kabat, CdrDefinition::Imgt);
+        assert!(!Backend::Abnum.serves(imgt_cdr));
+        assert!(Backend::Anarci.serves(imgt));
+        assert!(!Backend::Native.serves(AntibodySettings::default()));
+    }
+
+    #[test]
     fn backend_words_round_trip() {
         for b in Backend::ALL {
             assert_eq!(Backend::parse(b.name()), Some(b));
         }
         assert_eq!(Backend::parse("anarci"), Some(Backend::Anarci));
+        assert_eq!(Backend::parse("abnum"), Some(Backend::Abnum));
         assert_eq!(Backend::parse("other"), None);
     }
 }

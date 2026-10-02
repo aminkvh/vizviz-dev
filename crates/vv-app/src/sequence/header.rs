@@ -7,6 +7,7 @@ use egui::{vec2, Sense, Ui};
 use vv_core::antibody::{CdrDefinition, Scheme};
 use vv_scene::Scene;
 
+use super::abnum;
 use super::anarci::Backend;
 use super::cache::Fetch;
 use super::color::{from_packed, SCHEMES};
@@ -99,17 +100,21 @@ fn antibody_choices(ui: &mut Ui, state: &mut SequenceState, scene: &Scene) {
 /// Who numbers the domains, with ANARCI's progress or failure beside it.
 fn backend_choice(ui: &mut Ui, state: &mut SequenceState, scene: &Scene) {
     ui.label("Numbers from");
-    let names: Vec<&str> = Backend::ALL.iter().map(|b| b.name()).collect();
+    let names: Vec<&str> = Backend::ALL.iter().map(|b| b.label()).collect();
     let current = Backend::ALL
         .iter()
         .position(|b| *b == state.antibody.backend);
     if let Some(i) = widgets::select(ui, "sequence-ab-backend", &names, current, "native") {
         state.antibody.backend = Backend::ALL[i];
     }
-    if state.antibody.backend == Backend::Anarci {
-        if let Some(notice) = state.cache.anarci_notice(scene) {
-            ui.weak(notice);
-        }
+    if state.antibody.backend == Backend::Native {
+        return;
+    }
+    if state.antibody.backend == Backend::Abnum {
+        ui.weak(abnum::PLAIN_HTTP_NOTICE);
+    }
+    if let Some(notice) = state.cache.external_notice(scene, state.antibody) {
+        ui.weak(notice);
     }
 }
 

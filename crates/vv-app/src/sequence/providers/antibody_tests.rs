@@ -203,7 +203,7 @@ fn anarci_without_its_executable_falls_back_to_native_and_says_why() {
     let first = cache.track(id, loaded, &Antibody, &env);
     assert!(!first.any_in(&all), "empty while ANARCI runs");
     assert_eq!(
-        cache.anarci_notice(&scene).as_deref(),
+        cache.external_notice(&scene, settings).as_deref(),
         Some("ANARCI running\u{2026}")
     );
 
@@ -218,11 +218,68 @@ fn anarci_without_its_executable_falls_back_to_native_and_says_why() {
     };
     let native = run(loaded, AntibodySettings::default());
     assert!((0..residues(loaded)).all(|r| shown.kind(r) == native.kind(r)));
-    let notice = cache.anarci_notice(&scene).unwrap();
+    let notice = cache.external_notice(&scene, settings).unwrap();
     assert!(
         notice.starts_with("ANARCI failed: `no-such-anarci` is not a file")
             && notice.ends_with("showing native numbering"),
         "{notice}"
+    );
+}
+
+#[test]
+fn an_unreachable_abnum_falls_back_to_native_and_says_so() {
+    use crate::sequence::anarci::Backend;
+    use crate::sequence::cache::Cache;
+    use std::time::{Duration, Instant};
+
+    let (scene, id) = scene_of(&[HEAVY, LIGHT], "abnum-down");
+    let loaded = scene.structure(id).unwrap();
+    let mut cache = Cache::default();
+    cache.set_abnum_server("http://127.0.0.1:1/abnum.cgi");
+    let settings = AntibodySettings {
+        backend: Backend::Abnum,
+        ..Default::default()
+    };
+    let env = cache.env(&scene, settings, false);
+    let all = 0..residues(loaded);
+
+    let start = Instant::now();
+    let shown = loop {
+        let t = cache.track(id, loaded, &Antibody, &env);
+        if t.any_in(&all) {
+            break t;
+        }
+        assert!(start.elapsed() < Duration::from_secs(30), "never fell back");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let native = run(loaded, AntibodySettings::default());
+    assert!((0..residues(loaded)).all(|r| shown.kind(r) == native.kind(r)));
+    assert_eq!(
+        cache.external_notice(&scene, settings).as_deref(),
+        Some("Abnum unreachable: showing native numbering")
+    );
+}
+
+#[test]
+fn abnum_has_no_imgt_so_native_numbers_show_without_a_request() {
+    use crate::sequence::anarci::Backend;
+    use crate::sequence::cache::Cache;
+
+    let (scene, id) = scene_of(&[HEAVY], "abnum-imgt");
+    let loaded = scene.structure(id).unwrap();
+    let mut cache = Cache::default();
+    cache.set_abnum_server("http://127.0.0.1:1/abnum.cgi");
+    let settings = AntibodySettings {
+        scheme: Scheme::Imgt,
+        cdr: CdrDefinition::Imgt,
+        backend: Backend::Abnum,
+    };
+    let env = cache.env(&scene, settings, false);
+    let t = cache.track(id, loaded, &Antibody, &env);
+    assert!(t.any_in(&(0..residues(loaded))), "native, at once");
+    assert_eq!(
+        cache.external_notice(&scene, settings).as_deref(),
+        Some("Abnum has no IMGT numbering: showing native numbering")
     );
 }
 

@@ -131,7 +131,7 @@ fn chain_of(letter: &str) -> Option<ChainType> {
     })
 }
 
-fn parse_label(number: &str, insertion: Option<&str>) -> Result<Label, String> {
+pub(super) fn parse_label(number: &str, insertion: Option<&str>) -> Result<Label, String> {
     let number: u16 = number
         .parse()
         .map_err(|_| format!("bad residue number `{number}`"))?;

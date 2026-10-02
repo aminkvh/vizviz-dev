@@ -11,6 +11,7 @@ mod aho;
 mod align;
 mod cdr;
 mod consensus;
+pub mod abnum;
 pub mod external;
 mod full;
 mod numbering;

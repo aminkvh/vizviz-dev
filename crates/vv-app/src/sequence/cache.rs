@@ -13,6 +13,7 @@ use egui::Color32;
 use vv_core::seqfeat::EntityChain;
 use vv_scene::{ColorScheme, LoadedStructure, Scene, StructureId};
 
+use super::abnum;
 use super::anarci::{self, Backend, Outcome};
 use super::background::{Jobs, Progress};
 use super::color::{residue_colors, ColorInput, SeqColor};
@@ -35,7 +36,7 @@ struct Stamp {
     /// Which background inputs had arrived, one bit each.
     ready: u8,
     peers: u64,
-    /// Hash of the ANARCI path setting while that backend is in use.
+    /// Hash of the external backend and its setting while one is in use.
     exe: u64,
 }
 
@@ -54,9 +55,9 @@ impl Stamp {
     }
 }
 
-fn hash_of(path: &Option<PathBuf>) -> u64 {
+fn hash_of(value: &impl Hash) -> u64 {
     let mut h = DefaultHasher::new();
-    path.hash(&mut h);
+    value.hash(&mut h);
     h.finish()
 }
 
@@ -119,6 +120,7 @@ pub struct Cache {
     uniprot: Job<uniprot::Data>,
     anarci: Job<Outcome>,
     anarci_exe: Option<PathBuf>,
+    abnum_server: Option<String>,
     peers: Arc<Peers>,
     peers_stamp: u64,
     wake: Option<egui::Context>,
@@ -223,16 +225,17 @@ impl Cache {
         } else {
             Fetch::Unavailable
         };
-        let external = inputs.anarci && env.antibody.backend == Backend::Anarci;
+        let backend = env.antibody.backend;
+        let external = inputs.anarci && backend.serves(env.antibody);
         let anarci = if external {
-            self.anarci(id, loaded)
+            self.anarci(id, loaded, backend)
         } else {
             Fetch::Unavailable
         };
         let mut stamp = Stamp::of(loaded, provider.frame_key(loaded, loaded.frame));
         stamp.antibody = provider.uses_antibody_settings().then_some(env.antibody);
         stamp.exe = if external {
-            hash_of(&self.anarci_exe)
+            self.backend_hash(backend)
         } else {
             0
         };
@@ -335,27 +338,57 @@ impl Cache {
         }
     }
 
-    /// ANARCI's numbering of the structure's chains, run once on a worker
-    /// thread for every scheme.
-    fn anarci(&mut self, id: StructureId, loaded: &LoadedStructure) -> Fetch<Outcome> {
+    /// Where Abnum requests go instead of the public server (tests).
+    #[cfg(test)]
+    pub fn set_abnum_server(&mut self, url: &str) {
+        self.abnum_server = Some(url.to_string());
+    }
+
+    fn backend_hash(&self, backend: Backend) -> u64 {
+        hash_of(&(backend, &self.anarci_exe, &self.abnum_server))
+    }
+
+    /// The external program's numbering of the structure's chains, run
+    /// once on a worker thread for every scheme.
+    fn anarci(
+        &mut self,
+        id: StructureId,
+        loaded: &LoadedStructure,
+        backend: Backend,
+    ) -> Fetch<Outcome> {
         let mut stamp = Stamp::of(loaded, 0);
-        stamp.exe = hash_of(&self.anarci_exe);
-        let exe = self.anarci_exe.clone();
+        stamp.exe = self.backend_hash(backend);
+        let (exe, server) = (self.anarci_exe.clone(), self.abnum_server.clone());
         settle(&mut self.anarci, self.wake.as_ref(), id, stamp, || {
             let top = &loaded.structure.topology;
             let chains = anarci::chain_sequences(top, &chain_rows(top));
-            move || Some(anarci::number(exe.as_deref(), &chains))
+            move || {
+                Some(match backend {
+                    Backend::Abnum => abnum::number(server.as_deref(), &chains),
+                    _ => anarci::number(exe.as_deref(), &chains),
+                })
+            }
         })
     }
 
     /// What to tell the user about the external numbering of the open
     /// structures: that it is running, or why native numbers are shown.
-    pub fn anarci_notice(&mut self, scene: &Scene) -> Option<String> {
+    pub fn external_notice(&mut self, scene: &Scene, settings: AntibodySettings) -> Option<String> {
+        let backend = settings.backend;
+        if let Some(scheme) = backend.missing(settings) {
+            return Some(format!(
+                "{} has no {} numbering: showing native numbering",
+                backend.name(),
+                scheme.name()
+            ));
+        }
         let mut failure = None;
         for (id, loaded) in scene.structures() {
-            match self.anarci(id, loaded) {
-                Fetch::Pending => return Some("ANARCI running\u{2026}".into()),
-                Fetch::Unavailable => failure = Some("ANARCI stopped unexpectedly".to_string()),
+            match self.anarci(id, loaded, backend) {
+                Fetch::Pending => return Some(format!("{} running\u{2026}", backend.name())),
+                Fetch::Unavailable => {
+                    failure = Some(format!("{} stopped unexpectedly", backend.name()))
+                }
                 Fetch::Ready(done) => {
                     if let Some(Err(e)) = done.as_ref() {
                         failure = Some(e.to_string());
@@ -363,7 +396,8 @@ impl Cache {
                 }
             }
         }
-        failure.map(|f| format!("{f}; showing native numbering"))
+        let joint = if backend == Backend::Abnum { ":" } else { ";" };
+        failure.map(|f| format!("{f}{joint} showing native numbering"))
     }
 
     /// One color per residue under `scheme`, or `None` when it draws none

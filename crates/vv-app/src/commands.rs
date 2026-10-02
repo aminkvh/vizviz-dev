@@ -215,7 +215,9 @@ pub const VIEW_ENTRIES: &[Entry] = &[
                martin) and `antibody cdr` the CDR definition (kabat, chothia, imgt, contact, \
                north), independently; `antibody backend anarci` takes the numbers from the \
                external ANARCI program instead of the built-in profiles (`antibody exe PATH` \
-               says where it is). `uniprot on|off` draws UniProt features and `uniprot variants on|off` its natural variants (needs the \
+               says where it is), and `antibody backend abnum` from the scheme authors' public \
+               web service (Kabat, Chothia and Martin only; sends sequences over plain HTTP; \
+               `cdr` stays native). `uniprot on|off` draws UniProt features and `uniprot variants on|off` its natural variants (needs the \
                network). `props` prints each protein chain's mass, pI, charge and extinction.",
     },
     Entry {

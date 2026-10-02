@@ -21,6 +21,8 @@ pub enum Assembly {
 pub enum FetchError {
     #[error("`{0}` is not a PDB ID (4 characters like 4HHB, or pdb_0000XXXX)")]
     BadId(String),
+    #[error("`{0}` cannot be sent for numbering: one-letter capitals and a known scheme only")]
+    BadRequest(String),
     #[error("RCSB has no {what} for {id} (HTTP {status})")]
     NotFound {
         id: String,
