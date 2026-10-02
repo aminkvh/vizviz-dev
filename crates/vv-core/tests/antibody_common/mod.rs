@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use vv_core::antibody::{find_domains, ChainType, Domain, Label, Scheme};
 
+pub mod reference;
+
 pub struct Residue {
     pub label: Label,
     pub aa: char,
