@@ -7,11 +7,11 @@
 //! length rules. Method, data provenance, licences and measured accuracy:
 //! `docs/ANTIBODY.md`.
 
+pub mod abnum;
 mod aho;
 mod align;
 mod cdr;
 mod consensus;
-pub mod abnum;
 pub mod external;
 mod full;
 mod numbering;

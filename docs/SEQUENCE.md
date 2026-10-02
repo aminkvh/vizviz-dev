@@ -52,7 +52,9 @@ not sufficient for glycosylation.
 ### Antibody settings
 
 With the `antibody` track on, the header adds a "Numbers from" menu (native, or the optional external ANARCI,
-`sequence antibody backend anarci`; see [Antibodies](ANTIBODY.md#external-backend)) and two menus: the numbering
+`sequence antibody backend anarci`; see [Antibodies](ANTIBODY.md#external-backend); or the scheme authors' public web
+service Abnum, `sequence antibody backend abnum`, Kabat/Chothia/Martin only and sent over plain HTTP, see
+[Antibodies](ANTIBODY.md#scheme-authors-program-as-a-backend)) and two menus: the numbering
 (`sequence antibody scheme kabat|chothia|imgt|martin|aho`; `enhancedchothia` is another name for `martin`) and the CDR
 definition (`sequence antibody cdr kabat|chothia|imgt|contact|north`). They
 are independent, so Kabat numbers can sit under Chothia loops. Numbers are

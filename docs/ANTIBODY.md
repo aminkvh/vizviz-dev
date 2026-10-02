@@ -607,6 +607,78 @@ test --release -p vv-core --test external_numbering -- --ignored --nocapture`
 with `VIZVIZ_ANARCI` set (the run takes a while: one ANARCI process per
 scheme over about 3,600 chains).
 
+## Scheme authors' program as a backend
+
+`sequence antibody backend abnum` (header menu "Numbers from: Abnum (web)")
+numbers chains with the public web service of the group that wrote the
+Kabat/Chothia/Martin program (Abnum, Abhinandan & Martin 2008, Mol Immunol
+45:3832; http://www.bioinf.org.uk/abs/abnum/). Off by default; only this
+choice sends anything. Nothing is bundled.
+
+**Privacy.** The site serves plain HTTP only, and its page says: "Companies
+may use this public server, but need to be aware that data are not encrypted
+and it is not secure." While the backend is selected the header says
+"Sequences are sent over plain HTTP to the public server at bioinf.org.uk".
+Each chain of 80 or more residues is sent, as one-letter capitals, once per
+scheme. Do not use it on unpublished sequences. The page also asks: "if you publish
+work which has used this server, please see" Abhinandan & Martin (2008).
+
+**Interface** (as the page states it): `GET
+http://www.bioinf.org.uk/abs/abnum/abnum.cgi?plain=1&aaseq=SEQUENCE&scheme=-k`
+with `plain=1` "to generate plain parsable text", `aaseq` the sequence, and
+`scheme` `-k` Kabat, `-c` Chothia or `-m` Martin. Reply, one residue per line:
+`<chain letter><number>[insertion letter] <residue>`, e.g. `H1 E`, `H52A P`,
+`L107 K`; the chain letter is `H` or `L` (kappa and lambda are told apart by
+the native profiles). Only the variable domain is numbered: a Fab heavy chain
+returns H1..H113, and residues before the domain (a tag) are dropped, so
+vizviz finds the range by matching the returned residues in the sequence sent.
+A sequence that is not a variable domain, or has an insertion in the middle,
+gets `# Error in numbering sequence  1`; vizviz reads that as "no domain", and
+`#` lines (warnings) are ignored. An unknown residue comes back as `X`. The
+program numbers one domain per sequence, so a second domain of a single-chain
+Fv is not numbered. Samples: `crates/vv-core/tests/data/abnum_*.txt`.
+
+**Behaviour.** One request per chain per scheme, sequential, at least 0.5 s
+apart, with a User-Agent naming vizviz and a 20 s timeout, on the same
+background thread as ANARCI. A chain whose first reply finds no domain is not
+asked again. Replies are cached on disk in the fetch cache (`abnum/`, keyed by
+scheme and sequence, the sequence kept in the file), so a repeat is offline
+and sends nothing. The header reads "Abnum running..." and, when the server
+cannot be reached, "Abnum unreachable: showing native numbering". IMGT and
+AHo are not offered: under those schemes, or a CDR definition that reads IMGT
+labels, the header says "Abnum has no IMGT numbering: showing native
+numbering" and nothing is sent. The `select cdr` expression stays native.
+The choice is saved in sessions.
+
+**Measured** (the service as of 2026-10-02, against the reference set of
+"Agreement with the scheme authors' program"; whole chains sent, labels
+compared per residue over the domain native numbering finds; the nine are the
+`RESIDUAL` domains of `antibody_reference_exact`, the forty a fixed
+pseudo-random draw of domains that native and the reference agree on in all
+three schemes; Martin has no reference entry for 1OAY_2 and 6NNJ_1, so seven
+domains):
+
+| Set | Scheme | Abnum = reference | Abnum = native | Residues Abnum = reference |
+|---|---|---|---|---|
+| nine residual domains | Kabat | 9/9 | 0/9 | 967/967 |
+| 40 agreeing domains | Kabat | 40/40 | 40/40 | 4,560/4,560 |
+| nine residual domains | Chothia | 9/9 | 0/9 | 967/967 |
+| 40 agreeing domains | Chothia | 40/40 | 40/40 | 4,560/4,560 |
+| seven residual domains | Martin | 7/7 | 0/7 | 752/752 |
+| 40 agreeing domains | Martin | 40/40 | 40/40 | 4,560/4,560 |
+
+Trastuzumab heavy and light through the service equal native in all three
+schemes. Today's program reproduces the reference on every one of the nine
+residual domains (the kappa FR3 gap site, the lambda and heavy N-terminal
+starts) and on all forty. That is a consistency check, not an independent
+one: the reference is this program's lineage, so the service agreeing says the
+server still behaves as the data were made, and that native numbering's nine
+misses are native's, not noise in the reference. For those domains the backend
+gives the exact numbers, at the cost of sending the sequence. Reprint with
+`cargo test --release -p vv-io --test abnum_live -- --ignored --nocapture`
+(`VIZVIZ_FIXTURES_REAL` set from a worktree; about 145 requests the first
+time, none after).
+
 ## Not done
 
 - The AHo columns for receptors are not implemented.

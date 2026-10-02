@@ -16,7 +16,11 @@ pub const URL: &str = "http://www.bioinf.org.uk/abs/abnum/abnum.cgi";
 const TIMEOUT: Duration = Duration::from_secs(20);
 /// Least time between two requests to the server.
 const SPACING: Duration = Duration::from_millis(500);
-const USER_AGENT: &str = concat!("vizviz/", env!("CARGO_PKG_VERSION"), " (antibody numbering)");
+const USER_AGENT: &str = concat!(
+    "vizviz/",
+    env!("CARGO_PKG_VERSION"),
+    " (antibody numbering)"
+);
 
 /// When the last request finished; held across a request so concurrent
 /// callers queue behind it.
@@ -61,7 +65,11 @@ fn fnv(text: &str) -> u64 {
 }
 
 fn cache_file(cache: &Path, sequence: &str, flag: &str) -> PathBuf {
-    let name = format!("{}-{:016x}.txt", flag.trim_start_matches('-'), fnv(sequence));
+    let name = format!(
+        "{}-{:016x}.txt",
+        flag.trim_start_matches('-'),
+        fnv(sequence)
+    );
     cache.join("abnum").join(name)
 }
 
@@ -158,7 +166,10 @@ mod tests {
         let dir = scratch("bad");
         for (seq, flag) in [("evql", "-k"), ("EV&QL", "-k"), ("EVQL", "-x"), ("", "-k")] {
             let got = number_at("http://127.0.0.1:1/", &dir, seq, flag);
-            assert!(matches!(got, Err(FetchError::BadRequest(_))), "{seq} {flag}");
+            assert!(
+                matches!(got, Err(FetchError::BadRequest(_))),
+                "{seq} {flag}"
+            );
         }
     }
 }

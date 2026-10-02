@@ -57,7 +57,10 @@ fn a_warning_comment_among_the_rows_is_ignored() {
 #[test]
 fn damaged_replies_are_errors() {
     assert!(parse_abnum(HEAVY, "<html>busy</html>\n").is_err());
-    assert!(parse_abnum("DIQM", HEAVY_KABAT).is_err(), "not in the query");
+    assert!(
+        parse_abnum("DIQM", HEAVY_KABAT).is_err(),
+        "not in the query"
+    );
     assert!(parse_abnum(HEAVY, "H1 E\nL2 V\n").is_err(), "mixed chains");
 }
 
