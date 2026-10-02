@@ -3,18 +3,22 @@
 //! long (solvent accessibility, reading a file's sequences, UniProt) are
 //! computed on worker threads (`background.rs`) and appear when done.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use egui::Color32;
 use vv_core::seqfeat::EntityChain;
 use vv_scene::{ColorScheme, LoadedStructure, Scene, StructureId};
 
+use super::anarci::{self, Backend, Outcome};
 use super::background::{Jobs, Progress};
 use super::color::{residue_colors, ColorInput, SeqColor};
 use super::peers::{self, Peers};
 use super::rows::{chain_rows, ligand_groups, LigandGroup};
-use super::tracks::{AntibodySettings, Extras, TrackContext, TrackData, TrackProvider};
+use super::tracks::{AntibodySettings, External, Extras, TrackContext, TrackData, TrackProvider};
 use super::uniprot;
 
 /// Structures larger than this skip solvent accessibility: its cost grows
@@ -31,6 +35,8 @@ struct Stamp {
     /// Which background inputs had arrived, one bit each.
     ready: u8,
     peers: u64,
+    /// Hash of the ANARCI path setting while that backend is in use.
+    exe: u64,
 }
 
 impl Stamp {
@@ -43,8 +49,15 @@ impl Stamp {
             antibody: None,
             ready: 0,
             peers: 0,
+            exe: 0,
         }
     }
+}
+
+fn hash_of(path: &Option<PathBuf>) -> u64 {
+    let mut h = DefaultHasher::new();
+    path.hash(&mut h);
+    h.finish()
 }
 
 struct Cached<T> {
@@ -88,6 +101,14 @@ impl<T> Fetch<T> {
 
 type Job<T> = Jobs<StructureId, Stamp, Option<T>>;
 
+fn external_state(fetch: &Fetch<Outcome>) -> External<'_> {
+    match fetch {
+        Fetch::Pending => External::Pending,
+        Fetch::Ready(done) => done.as_ref().as_ref().map_or(External::Off, External::Done),
+        Fetch::Unavailable => External::Off,
+    }
+}
+
 #[derive(Default)]
 pub struct Cache {
     tracks: HashMap<(StructureId, &'static str), Cached<Arc<TrackData>>>,
@@ -96,6 +117,8 @@ pub struct Cache {
     sasa: Job<Vec<f32>>,
     entity: Job<HashMap<String, EntityChain>>,
     uniprot: Job<uniprot::Data>,
+    anarci: Job<Outcome>,
+    anarci_exe: Option<PathBuf>,
     peers: Arc<Peers>,
     peers_stamp: u64,
     wake: Option<egui::Context>,
@@ -132,6 +155,15 @@ impl Cache {
         self.sasa.retain(open);
         self.entity.retain(open);
         self.uniprot.retain(open);
+        self.anarci.retain(open);
+    }
+
+    pub fn anarci_exe(&self) -> Option<&Path> {
+        self.anarci_exe.as_deref()
+    }
+
+    pub fn set_anarci_exe(&mut self, path: Option<PathBuf>) {
+        self.anarci_exe = path;
     }
 
     /// The structure's non-polymer molecules by name.
@@ -191,11 +223,23 @@ impl Cache {
         } else {
             Fetch::Unavailable
         };
+        let external = inputs.anarci && env.antibody.backend == Backend::Anarci;
+        let anarci = if external {
+            self.anarci(id, loaded)
+        } else {
+            Fetch::Unavailable
+        };
         let mut stamp = Stamp::of(loaded, provider.frame_key(loaded, loaded.frame));
         stamp.antibody = provider.uses_antibody_settings().then_some(env.antibody);
+        stamp.exe = if external {
+            hash_of(&self.anarci_exe)
+        } else {
+            0
+        };
         stamp.ready = u8::from(sasa.settled() && inputs.sasa)
             | u8::from(entity.settled() && inputs.entity) << 1
-            | u8::from(uniprot.settled() && inputs.uniprot) << 2;
+            | u8::from(uniprot.settled() && inputs.uniprot) << 2
+            | u8::from(anarci.settled() && external) << 3;
         stamp.peers = if inputs.peers { env.peers_stamp } else { 0 };
         let key = (id, provider.id());
         if let Some(hit) = self.tracks.get(&key).filter(|c| c.stamp == stamp) {
@@ -213,6 +257,7 @@ impl Cache {
                 entity: entity.value(),
                 uniprot: uniprot.value(),
                 peers: inputs.peers.then_some(&*env.peers),
+                anarci: external_state(&anarci),
                 structure: Some(id),
                 model: loaded.frame as u32 + 1,
             },
@@ -288,6 +333,37 @@ impl Cache {
             Fetch::Ready(data) if data.is_some() => Fetch::Ready(Arc::new(Some(()))),
             _ => Fetch::Unavailable,
         }
+    }
+
+    /// ANARCI's numbering of the structure's chains, run once on a worker
+    /// thread for every scheme.
+    fn anarci(&mut self, id: StructureId, loaded: &LoadedStructure) -> Fetch<Outcome> {
+        let mut stamp = Stamp::of(loaded, 0);
+        stamp.exe = hash_of(&self.anarci_exe);
+        let exe = self.anarci_exe.clone();
+        settle(&mut self.anarci, self.wake.as_ref(), id, stamp, || {
+            let top = &loaded.structure.topology;
+            let chains = anarci::chain_sequences(top, &chain_rows(top));
+            move || Some(anarci::number(exe.as_deref(), &chains))
+        })
+    }
+
+    /// What to tell the user about the external numbering of the open
+    /// structures: that it is running, or why native numbers are shown.
+    pub fn anarci_notice(&mut self, scene: &Scene) -> Option<String> {
+        let mut failure = None;
+        for (id, loaded) in scene.structures() {
+            match self.anarci(id, loaded) {
+                Fetch::Pending => return Some("ANARCI running\u{2026}".into()),
+                Fetch::Unavailable => failure = Some("ANARCI stopped unexpectedly".to_string()),
+                Fetch::Ready(done) => {
+                    if let Some(Err(e)) = done.as_ref() {
+                        failure = Some(e.to_string());
+                    }
+                }
+            }
+        }
+        failure.map(|f| format!("{f}; showing native numbering"))
     }
 
     /// One color per residue under `scheme`, or `None` when it draws none

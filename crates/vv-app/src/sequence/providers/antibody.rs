@@ -2,11 +2,13 @@
 //! CDR bars, for every variable domain found in a protein chain.
 
 use rayon::prelude::*;
-use vv_core::antibody::{find_in_residues, Annotation, Domain, Region};
+use vv_core::antibody::external::ExternalDomain;
+use vv_core::antibody::{find_in_residues, Annotation, ChainType, Domain, Region};
 
 use super::hex;
+use crate::sequence::anarci::Backend;
 use crate::sequence::tracks::{
-    legend, AntibodySettings, Glyph, TrackContext, TrackData, TrackProvider,
+    legend, AntibodySettings, External, Glyph, Inputs, TrackContext, TrackData, TrackProvider,
 };
 
 pub struct Antibody;
@@ -35,8 +37,34 @@ fn tick_indices(notes: &[Annotation]) -> Vec<usize> {
     out
 }
 
-fn tooltip(domain: &Domain, note: &Annotation, s: AntibodySettings) -> String {
-    let letter = domain.chain.letter();
+/// A numbered domain as the track paints it, whoever numbered it.
+struct Painted {
+    chain: ChainType,
+    start: usize,
+    notes: Vec<Annotation>,
+}
+
+impl Painted {
+    fn native(domain: &Domain, s: AntibodySettings) -> Self {
+        Self {
+            chain: domain.chain,
+            start: domain.start,
+            notes: domain.annotate(s.scheme, s.cdr),
+        }
+    }
+
+    /// `None` when ANARCI was not run for the scheme or definition.
+    fn external(domain: &ExternalDomain, s: AntibodySettings) -> Option<Self> {
+        Some(Self {
+            chain: domain.chain,
+            start: domain.start,
+            notes: domain.annotate(s.scheme, s.cdr)?,
+        })
+    }
+}
+
+fn tooltip(chain: ChainType, note: &Annotation, s: AntibodySettings) -> String {
+    let letter = chain.letter();
     let number = match s.scheme == s.cdr.native_scheme() {
         true => format!("{letter}{}", note.label),
         false => format!("{letter}{} ({} numbering)", note.label, s.scheme.name()),
@@ -48,17 +76,48 @@ fn tooltip(domain: &Domain, note: &Annotation, s: AntibodySettings) -> String {
     format!("{number} \u{B7} {region} ({})", s.cdr.name())
 }
 
-fn paint_domain(track: &mut TrackData, domain: &Domain, first: u32, s: AntibodySettings) {
-    let notes = domain.annotate(s.scheme, s.cdr);
-    for a in &notes {
+fn paint_domain(track: &mut TrackData, domain: &Painted, first: u32, s: AntibodySettings) {
+    let notes = &domain.notes;
+    for a in notes {
         let r = first + a.index as u32;
         track.mark(r, kind_of(a.region));
-        track.note(r, tooltip(domain, a, s));
+        track.note(r, tooltip(domain.chain, a, s));
     }
-    for i in tick_indices(&notes) {
+    for i in tick_indices(notes) {
         track.set_tick(first + notes[i].index as u32, notes[i].label.to_string());
     }
     track.set_badge(first + domain.start as u32, domain.chain.name());
+}
+
+/// Domains per chain row: ANARCI's when it is selected and has answered,
+/// native otherwise (the track stays empty only while ANARCI runs).
+fn painted_domains(ctx: &TrackContext) -> Vec<(u32, Vec<Painted>)> {
+    let s = ctx.antibody;
+    match (s.backend, ctx.extras.anarci) {
+        (Backend::Anarci, External::Pending) => Vec::new(),
+        (Backend::Anarci, External::Done(Ok(chains))) => ctx
+            .rows
+            .iter()
+            .zip(chains)
+            .map(|((_, rows), domains)| {
+                let painted = domains.iter().filter_map(|d| Painted::external(d, s));
+                (rows.start, painted.collect())
+            })
+            .collect(),
+        _ => {
+            let top = ctx.top();
+            ctx.rows
+                .par_iter()
+                .map(|(_, rows)| {
+                    let found = find_in_residues(top, rows.clone());
+                    (
+                        rows.start,
+                        found.iter().map(|d| Painted::native(d, s)).collect(),
+                    )
+                })
+                .collect()
+        }
+    }
 }
 
 impl TrackProvider for Antibody {
@@ -74,13 +133,15 @@ impl TrackProvider for Antibody {
         true
     }
 
+    fn inputs(&self) -> Inputs {
+        Inputs {
+            anarci: true,
+            ..Inputs::default()
+        }
+    }
+
     fn compute(&self, ctx: &TrackContext) -> TrackData {
-        let top = ctx.top();
-        let found: Vec<(u32, Vec<Domain>)> = ctx
-            .rows
-            .par_iter()
-            .map(|(_, rows)| (rows.start, find_in_residues(top, rows.clone())))
-            .collect();
+        let found = painted_domains(ctx);
         let mut track = ctx.new_track(
             Glyph::LabeledBar,
             vec![

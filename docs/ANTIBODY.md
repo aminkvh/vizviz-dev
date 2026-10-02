@@ -483,6 +483,58 @@ The cache is per `Topology` and starts empty on a clone; edit `chains` or
 `residues` in place only before the first query, or call
 `AntibodyCache::clear`.
 
+## External backend
+
+Native numbering is the default and needs nothing installed. For a second
+opinion, `sequence antibody backend anarci` (header menu "Numbers from")
+takes the numbers from ANARCI (Dunbar & Deane 2016, Bioinformatics 32:298;
+BSD-3-Clause), which the user installs; nothing of it is bundled or linked.
+Regions still come from the CDR definitions chosen under "CDRs".
+
+Install (needs HMMER 3): `conda create -n anarci -c conda-forge -c bioconda
+python=3.10 hmmer anarci`. On Windows, ANARCI runs inside WSL; install it in
+the Linux distribution the same way.
+
+How vizviz finds it, first match wins: `sequence antibody exe PATH` (saved in
+sessions), the `VIZVIZ_ANARCI` environment variable, `ANARCI` on the PATH,
+then `ANARCI` inside WSL (Windows only, on the distribution's login PATH). A
+conda install is usually not on that PATH: point at it with a `wsl:` prefix,
+for example `VIZVIZ_ANARCI=wsl:/home/me/miniconda3/envs/anarci/bin/ANARCI`
+(paths without spaces; its directory is added to the PATH for the run).
+
+All protein chains of a structure (80 residues or more) go in one FASTA, one
+ANARCI run per scheme, on a background thread; switching scheme or CDR
+definition afterwards does not rerun it. The track is empty while the header
+says "ANARCI running...". If the program is missing or fails, the header says
+why and the track shows native numbering.
+
+What differs from native: gamma and delta receptor chains are dropped (no
+native equivalent), and receptors are numbered in IMGT only, as natively.
+ANARCI does not number shark VNAR. Its AHo range can end one residue after
+its IMGT range; the extra residue is left unlabelled. The `select cdr`
+expression still uses native domains whatever the backend
+(`antibody::external::cdr_residues_external` is the ready bridge).
+
+Checked against ANARCI 2024.05.21 with HMMER 3.4 (conda, under WSL). Hand-made
+trastuzumab (heavy + light) agrees with native in all 227 residues in every
+scheme; 1N8Z in 227 of 228 (native's domain is one residue longer than
+ANARCI's). On the reference set above (seed entries dropped), same domains
+found by both, ANARCI against the scheme authors' program, as the native
+columns above:
+
+| | Domains | Native identical | ANARCI identical | Residues native | Residues ANARCI | Native = ANARCI residues |
+|---|---|---|---|---|---|---|
+| Kabat | 3,625 | 3,602 (99.4%) | 3,180 (87.7%) | 99.87% | 99.63% | 99.73% |
+| Chothia | 3,617 | 3,593 (99.3%) | 3,171 (87.7%) | 99.87% | 99.59% | 99.68% |
+| Martin | 3,605 | 3,582 (99.4%) | 3,054 (84.7%) | 99.87% | 99.40% | 99.50% |
+
+ANARCI also finds 17 domains native does not, and native finds none that
+ANARCI misses. Residues are those inside both domain ranges; "identical"
+needs the whole ANARCI domain to match the reference. Reprint with `cargo
+test --release -p vv-core --test external_numbering -- --ignored --nocapture`
+with `VIZVIZ_ANARCI` set (the run takes a while: one ANARCI process per
+scheme over about 3,600 chains).
+
 ## Not done
 
 - The AHo columns for receptors are not implemented.

@@ -49,6 +49,11 @@ fn fixture(path: &str) -> PathBuf {
 
 /// One CA-only chain per sequence, named A, B, ...
 fn chains_of(seqs: &[&str]) -> LoadedStructure {
+    let text = chains_pdb(seqs);
+    from_structure(vv_io::pdb::parse(text.as_bytes()).unwrap())
+}
+
+fn chains_pdb(seqs: &[&str]) -> String {
     let mut text = String::new();
     let mut serial = 0;
     for (chain, seq) in seqs.iter().enumerate() {
@@ -66,7 +71,7 @@ fn chains_of(seqs: &[&str]) -> LoadedStructure {
         }
         text.push_str("TER\n");
     }
-    from_structure(vv_io::pdb::parse(text.as_bytes()).unwrap())
+    text
 }
 
 fn run(l: &LoadedStructure, antibody: AntibodySettings) -> TrackData {
@@ -161,6 +166,138 @@ fn non_antibody_structures_get_no_antibody_marks() {
         let t = run(&l, AntibodySettings::default());
         assert!((0..residues(&l)).all(|r| t.kind(r) == 0), "{path}");
         assert_eq!(t.badges().count(), 0);
+    }
+}
+
+/// Loads the chains through a scene, as the application does.
+fn scene_of(seqs: &[&str], tag: &str) -> (vv_scene::Scene, vv_scene::StructureId) {
+    use vv_scene::{Command, CommandHistory, Scene};
+    let path = std::env::temp_dir().join(format!("vizviz-{tag}-{}.pdb", std::process::id()));
+    std::fs::write(&path, chains_pdb(seqs)).unwrap();
+    let mut scene = Scene::new();
+    let mut history = CommandHistory::new(10);
+    let loaded = history.dispatch(&mut scene, Command::LoadStructure { path: path.clone() });
+    std::fs::remove_file(path).unwrap();
+    loaded.unwrap();
+    let id = scene.structures().next().unwrap().0;
+    (scene, id)
+}
+
+#[test]
+fn anarci_without_its_executable_falls_back_to_native_and_says_why() {
+    use crate::sequence::anarci::Backend;
+    use crate::sequence::cache::Cache;
+    use std::time::{Duration, Instant};
+
+    let (scene, id) = scene_of(&[HEAVY, LIGHT], "anarci-missing");
+    let loaded = scene.structure(id).unwrap();
+    let mut cache = Cache::default();
+    cache.set_anarci_exe(Some("no-such-anarci".into()));
+    let settings = AntibodySettings {
+        backend: Backend::Anarci,
+        ..Default::default()
+    };
+    let env = cache.env(&scene, settings, false);
+    let all = 0..residues(loaded);
+
+    let first = cache.track(id, loaded, &Antibody, &env);
+    assert!(!first.any_in(&all), "empty while ANARCI runs");
+    assert_eq!(
+        cache.anarci_notice(&scene).as_deref(),
+        Some("ANARCI running\u{2026}")
+    );
+
+    let start = Instant::now();
+    let shown = loop {
+        let t = cache.track(id, loaded, &Antibody, &env);
+        if t.any_in(&all) {
+            break t;
+        }
+        assert!(start.elapsed() < Duration::from_secs(30), "never fell back");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let native = run(loaded, AntibodySettings::default());
+    assert!((0..residues(loaded)).all(|r| shown.kind(r) == native.kind(r)));
+    let notice = cache.anarci_notice(&scene).unwrap();
+    assert!(
+        notice.starts_with("ANARCI failed: `no-such-anarci` is not a file")
+            && notice.ends_with("showing native numbering"),
+        "{notice}"
+    );
+}
+
+#[test]
+fn native_backend_never_starts_anarci() {
+    use crate::sequence::cache::Cache;
+
+    let (scene, id) = scene_of(&[HEAVY], "anarci-native");
+    let loaded = scene.structure(id).unwrap();
+    let mut cache = Cache::default();
+    cache.set_anarci_exe(Some("no-such-anarci".into()));
+    let env = cache.env(&scene, AntibodySettings::default(), false);
+    let t = cache.track(id, loaded, &Antibody, &env);
+    assert!(t.any_in(&(0..residues(loaded))));
+}
+
+/// `(agreeing, total)` residue labels per scheme between native numbering
+/// and the real ANARCI, over domains both found.
+fn live_agreement(l: &LoadedStructure) -> Vec<(Scheme, usize, usize)> {
+    use crate::sequence::anarci;
+    use vv_core::antibody::find_in_residues;
+
+    let top = &l.structure.topology;
+    let rows = chain_rows(top);
+    let chains = anarci::chain_sequences(top, &rows);
+    let outcome = anarci::number(None, &chains).unwrap_or_else(|e| panic!("{e}"));
+    Scheme::ALL
+        .iter()
+        .map(|&scheme| {
+            let (mut agree, mut total) = (0, 0);
+            for ((_, residues), external) in rows.iter().zip(&outcome) {
+                for native in find_in_residues(top, residues.clone()) {
+                    let Some(theirs) = external.iter().find(|e| e.chain == native.chain) else {
+                        continue;
+                    };
+                    let Some(notes) = theirs.annotate(scheme, CdrDefinition::Kabat) else {
+                        println!(
+                            "{scheme:?}: no labels for {:?} {}..{}",
+                            theirs.chain, theirs.start, theirs.end
+                        );
+                        continue;
+                    };
+                    for (index, label) in native.numbering(scheme) {
+                        total += 1;
+                        agree +=
+                            usize::from(notes.iter().any(|a| a.index == index && a.label == label));
+                    }
+                }
+            }
+            (scheme, agree, total)
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "needs ANARCI (VIZVIZ_ANARCI, PATH or WSL); prints agreement with native numbering"]
+fn live_anarci_numbers_trastuzumab_like_native() {
+    let l = chains_of(&[HEAVY, LIGHT]);
+    for (scheme, agree, total) in live_agreement(&l) {
+        println!("trastuzumab {scheme:?}: {agree}/{total} residues agree");
+        assert!(total > 200 && agree * 100 >= total * 95, "{scheme:?}");
+    }
+}
+
+#[test]
+#[ignore = "needs ANARCI and $VIZVIZ_FIXTURES_REAL/1N8Z.cif; prints agreement with native numbering"]
+fn live_anarci_numbers_1n8z_like_native() {
+    let root = std::env::var_os("VIZVIZ_FIXTURES_REAL").map(PathBuf::from);
+    let Some(path) = root.map(|r| r.join("1N8Z.cif")).filter(|p| p.exists()) else {
+        return;
+    };
+    let l = from_structure(vv_io::load(path).unwrap());
+    for (scheme, agree, total) in live_agreement(&l) {
+        println!("1N8Z {scheme:?}: {agree}/{total} residues agree");
+        assert!(total > 200);
     }
 }
 

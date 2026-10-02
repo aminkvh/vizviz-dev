@@ -1,8 +1,11 @@
 //! `sequence color|track|tracks|legend`: the Sequence panel header's
 //! choices as commands.
 
+use std::path::PathBuf;
+
 use vv_core::antibody::{CdrDefinition, Scheme};
 
+use super::anarci::Backend;
 use super::chain_props;
 use super::color::{SeqColor, SCHEMES};
 use super::rows::rows_of;
@@ -111,12 +114,29 @@ impl AppUi<'_> {
                     )
                 })?;
             }
-            _ => return Err("expected `sequence antibody [scheme NAME | cdr NAME]`".into()),
+            ("backend", _) => {
+                settings.backend = Backend::parse(name).ok_or_else(|| {
+                    let all: Vec<&str> = Backend::ALL.iter().map(|b| b.name()).collect();
+                    format!("unknown backend `{name}`; expected {}", all.join(", "))
+                })?;
+            }
+            ("exe", _) => {
+                let path = (!name.is_empty()).then(|| PathBuf::from(name));
+                self.sequence.cache.set_anarci_exe(path);
+            }
+            _ => {
+                return Err(
+                    "expected `sequence antibody [scheme NAME | cdr NAME | backend native|anarci | exe PATH]`"
+                        .into(),
+                )
+            }
         }
+        let settings = self.sequence.antibody;
         Ok(format!(
-            "sequence antibody: numbering {}, CDRs {}",
+            "sequence antibody: numbering {}, CDRs {}, numbers from {}",
             settings.scheme.name(),
-            settings.cdr.name()
+            settings.cdr.name(),
+            settings.backend.name()
         ))
     }
 

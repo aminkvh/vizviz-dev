@@ -7,6 +7,7 @@ use egui::{vec2, Sense, Ui};
 use vv_core::antibody::{CdrDefinition, Scheme};
 use vv_scene::Scene;
 
+use super::anarci::Backend;
 use super::cache::Fetch;
 use super::color::{from_packed, SCHEMES};
 use super::tracks::{Glyph, TrackData, PROVIDERS};
@@ -20,7 +21,7 @@ pub fn show(ui: &mut Ui, state: &mut SequenceState, scene: &Scene) {
         tracks_menu(ui, state);
         uniprot_toggle(ui, state, scene);
         if state.track_on("antibody") {
-            antibody_choices(ui, state);
+            antibody_choices(ui, state, scene);
         }
         if state.legend {
             key_inline(ui, state, scene);
@@ -77,7 +78,8 @@ fn uniprot_toggle(ui: &mut Ui, state: &mut SequenceState, scene: &Scene) {
     }
 }
 
-fn antibody_choices(ui: &mut Ui, state: &mut SequenceState) {
+fn antibody_choices(ui: &mut Ui, state: &mut SequenceState, scene: &Scene) {
+    backend_choice(ui, state, scene);
     ui.label("Numbering");
     let names: Vec<&str> = Scheme::ALL.iter().map(|s| s.name()).collect();
     let current = Scheme::ALL.iter().position(|s| *s == state.antibody.scheme);
@@ -91,6 +93,23 @@ fn antibody_choices(ui: &mut Ui, state: &mut SequenceState) {
         .position(|d| *d == state.antibody.cdr);
     if let Some(i) = widgets::select(ui, "sequence-ab-cdr", &names, current, "Kabat") {
         state.antibody.cdr = CdrDefinition::ALL[i];
+    }
+}
+
+/// Who numbers the domains, with ANARCI's progress or failure beside it.
+fn backend_choice(ui: &mut Ui, state: &mut SequenceState, scene: &Scene) {
+    ui.label("Numbers from");
+    let names: Vec<&str> = Backend::ALL.iter().map(|b| b.name()).collect();
+    let current = Backend::ALL
+        .iter()
+        .position(|b| *b == state.antibody.backend);
+    if let Some(i) = widgets::select(ui, "sequence-ab-backend", &names, current, "native") {
+        state.antibody.backend = Backend::ALL[i];
+    }
+    if state.antibody.backend == Backend::Anarci {
+        if let Some(notice) = state.cache.anarci_notice(scene) {
+            ui.weak(notice);
+        }
     }
 }
 

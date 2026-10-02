@@ -11,6 +11,7 @@
 //! (`header.rs`) chooses both and `sequence ...` commands (`command.rs`)
 //! do the same.
 
+mod anarci;
 mod background;
 mod cache;
 mod chain_props;

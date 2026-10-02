@@ -10,6 +10,7 @@
 mod aho;
 mod align;
 mod cdr;
+pub mod external;
 mod numbering;
 mod profile;
 mod seeds;

@@ -11,6 +11,7 @@ use vv_core::glam::Vec3;
 use vv_core::seqfeat::EntityChain;
 use vv_scene::{LoadedStructure, StructureId};
 
+use super::anarci::{Backend, Outcome};
 use super::peers::Peers;
 use super::uniprot;
 
@@ -31,11 +32,12 @@ pub enum Glyph {
     LabeledBar,
 }
 
-/// The antibody track's two independent choices.
+/// The antibody track's independent choices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AntibodySettings {
     pub scheme: Scheme,
     pub cdr: CdrDefinition,
+    pub backend: Backend,
 }
 
 impl Default for AntibodySettings {
@@ -43,6 +45,7 @@ impl Default for AntibodySettings {
         Self {
             scheme: Scheme::Kabat,
             cdr: CdrDefinition::Kabat,
+            backend: Backend::Native,
         }
     }
 }
@@ -164,6 +167,18 @@ pub struct Inputs {
     pub uniprot: bool,
     /// The protein chains of all loaded structures.
     pub peers: bool,
+    /// Numbers from the external ANARCI backend, when it is selected.
+    pub anarci: bool,
+}
+
+/// How the external numbering run stands, for a track that asked for it.
+#[derive(Clone, Copy, Default)]
+pub enum External<'a> {
+    /// Not requested, or the worker died: use native numbering.
+    #[default]
+    Off,
+    Pending,
+    Done(&'a Outcome),
 }
 
 /// Inputs that arrive after a structure is loaded. A provider that asks
@@ -175,6 +190,7 @@ pub struct Extras<'a> {
     pub entity: Option<&'a HashMap<String, EntityChain>>,
     pub uniprot: Option<&'a uniprot::Data>,
     pub peers: Option<&'a Peers>,
+    pub anarci: External<'a>,
     pub structure: Option<StructureId>,
     /// The shown model, 1-based.
     pub model: u32,

@@ -204,7 +204,7 @@ pub const VIEW_ENTRIES: &[Entry] = &[
             "annotation", "annotations", "kabat", "numbering", "glycosylation", "disulfide",
             "liability", "liabilities", "sasa", "hydrophobicity", "track", "legend", "strip",
         ],
-        usage: "sequence color SCHEME | track NAME [on|off] | tracks [all|none] | legend [on|off] | antibody scheme|cdr NAME | uniprot [variants] [on|off] | props",
+        usage: "sequence color SCHEME | track NAME [on|off] | tracks [all|none] | legend [on|off] | antibody scheme|cdr|backend NAME | antibody exe PATH | uniprot [variants] [on|off] | props",
         help: "The Sequence panel's header as commands. `color` picks how residue letters \
                are colored: none, view (as the 3D view), ss, chemistry, hydrophobicity, \
                bfactor, sasa, charge, clustal, zappo, taylor. `track` shows or hides an \
@@ -213,7 +213,9 @@ pub const VIEW_ENTRIES: &[Entry] = &[
                uniprot. `tracks all|none` sets every offline track; `legend` shows the key of \
                the enabled ones. `antibody scheme` picks the numbering (kabat, chothia, imgt, \
                martin) and `antibody cdr` the CDR definition (kabat, chothia, imgt, contact, \
-               north), independently. `uniprot on|off` draws UniProt features and `uniprot variants on|off` its natural variants (needs the \
+               north), independently; `antibody backend anarci` takes the numbers from the \
+               external ANARCI program instead of the built-in profiles (`antibody exe PATH` \
+               says where it is). `uniprot on|off` draws UniProt features and `uniprot variants on|off` its natural variants (needs the \
                network). `props` prints each protein chain's mass, pI, charge and extinction.",
     },
     Entry {

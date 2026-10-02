@@ -5,6 +5,7 @@
 use serde_json::{json, Value};
 use vv_core::antibody::{CdrDefinition, Scheme};
 
+use super::anarci::Backend;
 use super::color::SeqColor;
 use super::tracks::{provider, PROVIDERS};
 use super::SequenceState;
@@ -23,6 +24,8 @@ impl SequenceState {
             "antibody": {
                 "scheme": self.antibody.scheme.name(),
                 "cdr": self.antibody.cdr.name(),
+                "backend": self.antibody.backend.name(),
+                "anarci": self.cache.anarci_exe().map(|p| p.to_string_lossy()),
             },
         })
     }
@@ -49,6 +52,15 @@ impl SequenceState {
         {
             self.antibody.cdr = d;
         }
+        if let Some(b) = saved["antibody"]["backend"]
+            .as_str()
+            .and_then(Backend::parse)
+        {
+            self.antibody.backend = b;
+        }
+        if let Some(path) = saved["antibody"]["anarci"].as_str() {
+            self.cache.set_anarci_exe(Some(path.into()));
+        }
     }
 }
 
@@ -67,6 +79,10 @@ mod tests {
         state.legend = true;
         state.antibody.scheme = Scheme::Imgt;
         state.antibody.cdr = CdrDefinition::North;
+        state.antibody.backend = Backend::Anarci;
+        state
+            .cache
+            .set_anarci_exe(Some("/opt/anarci/bin/ANARCI".into()));
 
         let text = serde_json::to_string(&state.snapshot()).unwrap();
         let mut back = SequenceState::default();
@@ -76,6 +92,16 @@ mod tests {
         assert!(back.track_on("antibody") && back.track_on("ss") && back.tracks.len() == 2);
         assert!(back.legend);
         assert_eq!(back.antibody, state.antibody);
+        assert_eq!(back.antibody.backend, Backend::Anarci);
+        assert_eq!(back.cache.anarci_exe(), state.cache.anarci_exe());
+    }
+
+    #[test]
+    fn a_session_without_a_backend_keeps_native() {
+        let mut state = SequenceState::default();
+        state.restore(&json!({"antibody": {"scheme": "IMGT", "backend": "bogus"}}));
+        assert_eq!(state.antibody.backend, Backend::Native);
+        assert_eq!(state.antibody.scheme, Scheme::Imgt);
     }
 
     #[test]
